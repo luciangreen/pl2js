@@ -6,6 +6,11 @@
 
 2. **`pl2js.js` + `index.html`** — a browser-side translator/runtime that lets you write, load, save, and run Prolog **directly in the browser** with no server or installation required.  The browser tool parses Prolog source text on the fly, builds a clause database, and executes queries against it — all in JavaScript.  It intentionally avoids building a full interpreter or WAM; instead it uses simple clause-structure iteration with explicit unification and continuation-passing backtracking.
 
+
+---
+
+* NEW: Run code directly in browser without installation with [pl2js](https://luciangreen.github.io/pl2js/).
+
 ---
 
 ## Quick start — browser editor (no installation needed)
