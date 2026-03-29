@@ -11,8 +11,8 @@
 :- use_module(library(lists)).
 :- use_module(library(readutil)).
 
-% Dynamic predicate to store variable-name-to-index mapping during compilation
-:- dynamic var_name_index_map/2.
+% b_setval key used to store the ordered list of clause variables during compilation
+% (b_setval preserves variable identity, unlike assert/retract)
 
 %% compile_prolog_to_js(+PrologFile, +JSFile)
 % Main entry point: compiles a Prolog file to JavaScript
@@ -840,7 +840,7 @@ translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast
 ', [Index, HeadDisp, BodyDisp, Index, Index, Index, FuncName, NextIndex, ArgsArr, VarDecls, HeadCode, BodyCode, Index, Index])
             )
         ),
-        retractall(var_name_index_map(_, _))
+        b_setval(pl2js_clause_vars, [])
     ).
 
 translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, ArgsArr, JSCode) :-
@@ -891,7 +891,7 @@ translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, ArgsArr,
 ', [Index, HeadDisp, Index, Index, Index, FuncName, NextIndex, ArgsArr, VarDecls, HeadCode, Index, Index])
             )
         ),
-        retractall(var_name_index_map(_, _))
+        b_setval(pl2js_clause_vars, [])
     ).
 
 clause_head((Head :- _), Head) :- !.
@@ -963,7 +963,7 @@ translate_single_clause((Head :- Body), Index, JSCode) :-
     }
 ', [Index, HeadDisp, BodyDisp, VarDecls, HeadCode, BodyCode])
         ),
-        retractall(var_name_index_map(_, _))
+        b_setval(pl2js_clause_vars, [])
     ).
 
 translate_single_clause(Head, Index, JSCode) :-
@@ -990,7 +990,7 @@ translate_single_clause(Head, Index, JSCode) :-
     }
 ', [Index, HeadDisp, VarDecls, HeadCode])
         ),
-        retractall(var_name_index_map(_, _))
+        b_setval(pl2js_clause_vars, [])
     ).
 
 %% extract_predicate_info(+Term, -Name, -Arity, -Args)
@@ -1201,26 +1201,28 @@ escape_js_string([C|Rest], [C|EscapedRest]) :-
     escape_js_string(Rest, EscapedRest).
 
 %% create_var_map(+Vars)
+% Stores the ordered list of clause variables using b_setval to preserve
+% variable identity (b_setval does not copy terms, unlike assert/retract)
 create_var_map(Vars) :-
-    retractall(var_name_index_map(_, _)),
-    format(atom(_), '~w', [Vars]),
-    create_var_map_impl(Vars, 0).
+    b_setval(pl2js_clause_vars, Vars).
 
-create_var_map_impl([], _).
-create_var_map_impl([V|Vs], N) :-
-    format(atom(VarName), '~w', [V]),
-    assert(var_name_index_map(VarName, N)),
+%% find_var_index(+Var, +VarList, -Index)
+% Finds the position (0-based) of Var in VarList using identity comparison (==/2)
+find_var_index(Var, List, Index) :-
+    find_var_index_(Var, List, 0, Index).
+
+find_var_index_(Var, [V|_], N, N) :- Var == V, !.
+find_var_index_(Var, [_|Vs], N, Index) :-
     N1 is N + 1,
-    create_var_map_impl(Vs, N1).
+    find_var_index_(Var, Vs, N1, Index).
 
 %% get_var_index(+Var, -Index)
 get_var_index(Var, Index) :-
-    format(atom(VarName), '~w', [Var]),
-    var_name_index_map(VarName, Index),
+    b_getval(pl2js_clause_vars, Vars),
+    find_var_index(Var, Vars, Index),
     !.
 get_var_index(Var, _) :-
-    format(atom(VarName), '~w', [Var]),
-    format(user_error, 'ERROR: Variable ~w (name: ~w) not found in mapping~n', [Var, VarName]),
+    format(user_error, 'ERROR: Variable ~w not found in mapping~n', [Var]),
     fail.
 
 %% generate_var_declarations(+Vars, -Decls)
@@ -1291,9 +1293,14 @@ write_js_file(File, JSCode) :-
     write(Stream, JSCode),
     close(Stream).
 
-%% compile_file(+PrologFile, +OutputBase)
-% Compiles Prolog file to JavaScript
-compile_file(PrologFile, OutputBase) :-
+%% compile_file(+PrologBase, +OutputBase)
+% Compiles Prolog file (auto-appending .pl if needed) to JavaScript
+compile_file(PrologBase, OutputBase) :-
+    ( file_name_extension(_, pl, PrologBase) ->
+        PrologFile = PrologBase
+    ;
+        file_name_extension(PrologBase, pl, PrologFile)
+    ),
     format(atom(JSFile), '~w.js', [OutputBase]),
     compile_prolog_to_js(PrologFile, JSFile).
 
