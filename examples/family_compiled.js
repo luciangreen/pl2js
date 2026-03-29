@@ -23,11 +23,12 @@ function initState() {
     };
 }
 
-function pushChoicePoint(state, predId, clauseIdx) {
+function pushChoicePoint(state, predId, clauseIdx, callArgs) {
     state.choiceStack.push({
         predId: predId,
         clauseIdx: clauseIdx,
-        savedBindingsSize: state.bindings.length
+        savedBindingsSize: state.bindings.length,
+        callArgs: callArgs !== undefined ? callArgs : null
     });
 }
 
@@ -36,6 +37,23 @@ function popChoicePoint(state) {
     const cp = state.choiceStack.pop();
     state.bindings = state.bindings.slice(0, cp.savedBindingsSize);
     return true;
+}
+
+function _retryBody(state, minCpDepth) {
+    while (state.choiceStack.length > minCpDepth) {
+        const cp = state.choiceStack[state.choiceStack.length - 1];
+        /* Skip choice points that have no stored callArgs (e.g. disjunction
+           markers pushed with null predId); they cannot be retried by
+           re-invoking a predicate, so just discard them and keep looking. */
+        if (!cp.callArgs) { state.choiceStack.pop(); continue; }
+        state.bindings = state.bindings.slice(0, cp.savedBindingsSize);
+        state.failed = false;
+        state.backtracking = true;
+        const result = cp.predId(state, ...cp.callArgs);
+        if (result && !state.failed) return true;
+        state.failed = false;
+    }
+    return false;
 }
 
 function performCut(state) {
@@ -133,8 +151,8 @@ function evalArithmetic(state, expr) {
             if (f === "**" || f === "^") return Math.pow(l, r) | 0;
             if (f === ">>")  return l >> r;
             if (f === "<<")  return l << r;
-            if (f === "/\") return l & r;
-            if (f === "\/") return l | r;
+            if (f === "/\\") return l & r;
+            if (f === "\\/") return l | r;
             if (f === "xor") return l ^ r;
             if (f === "min") return Math.min(l, r);
             if (f === "max") return Math.max(l, r);
@@ -151,7 +169,7 @@ function evalArithmetic(state, expr) {
             if (f === "round")    return Math.round(v);
             if (f === "truncate") return Math.trunc(v);
             if (f === "float_integer_part") return Math.trunc(v);
-            if (f === "\")       return ~v;
+            if (f === "\\")       return ~v;
         }
     }
     return 0;
@@ -280,12 +298,10 @@ function write_1(state, arg1) {
 }
 function writeln_1(state, arg1) {
     _prologWrite(termToString(state, deref(state, arg1)));
-    _prologWrite("
-");
+    _prologWrite("\n");
     return true;
 }
-function nl_0(state) { _prologWrite("
-"); return true; }
+function nl_0(state) { _prologWrite("\n"); return true; }
 function tab_1(state, arg1) {
     const t = deref(state, arg1);
     if (t.type !== "int") { state.failed = true; return false; }
@@ -310,8 +326,7 @@ function format_2(state, arg1, arg2) {
                 }
                 i += 2;
             } else if (spec === "n") {
-                out += "
-"; i += 2;
+                out += "\n"; i += 2;
             } else if (spec === "a") {
                 args = deref(state, args);
                 if (args.type === "list") {
@@ -641,7 +656,7 @@ function parent_2(state, arg1, arg2) {
         const _cpDepth1 = state.choiceStack.length;
         const _savedBindingsSize1 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, parent_2, 2);
+        pushChoicePoint(state, parent_2, 2, [arg1, arg2]);
         if (unify(state, createAtom("tom"), arg1) &&
             unify(state, createAtom("bob"), arg2)) {
 
@@ -657,7 +672,7 @@ function parent_2(state, arg1, arg2) {
         const _cpDepth2 = state.choiceStack.length;
         const _savedBindingsSize2 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, parent_2, 3);
+        pushChoicePoint(state, parent_2, 3, [arg1, arg2]);
         if (unify(state, createAtom("tom"), arg1) &&
             unify(state, createAtom("liz"), arg2)) {
 
@@ -673,7 +688,7 @@ function parent_2(state, arg1, arg2) {
         const _cpDepth3 = state.choiceStack.length;
         const _savedBindingsSize3 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, parent_2, 4);
+        pushChoicePoint(state, parent_2, 4, [arg1, arg2]);
         if (unify(state, createAtom("bob"), arg1) &&
             unify(state, createAtom("ann"), arg2)) {
 
@@ -689,7 +704,7 @@ function parent_2(state, arg1, arg2) {
         const _cpDepth4 = state.choiceStack.length;
         const _savedBindingsSize4 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, parent_2, 5);
+        pushChoicePoint(state, parent_2, 5, [arg1, arg2]);
         if (unify(state, createAtom("bob"), arg1) &&
             unify(state, createAtom("pat"), arg2)) {
 
@@ -705,7 +720,7 @@ function parent_2(state, arg1, arg2) {
         const _cpDepth5 = state.choiceStack.length;
         const _savedBindingsSize5 = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, parent_2, 9999);
+        pushChoicePoint(state, parent_2, 9999, [arg1, arg2]);
         if (unify(state, createAtom("pat"), arg1) &&
             unify(state, createAtom("jim"), arg2)) {
 
@@ -724,6 +739,7 @@ function grandparent_2(state, arg1, arg2) {
     {
         const _cpDepth = state.choiceStack.length;
         const _savedBindingsSize = state.bindings.length;
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         const var__2 = createVar(state.nextVarId++);
@@ -731,8 +747,18 @@ function grandparent_2(state, arg1, arg2) {
             unify(state, var__1, arg2)) {
 
             do {
-    if (!parent_2(state, var__0, var__2)) { state.failed = true; break; }
-    if (!parent_2(state, var__2, var__1)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!parent_2(state, var__0, var__2)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!parent_2(state, var__2, var__1)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
             } while (false);
             if (!state.failed) return true;
         }
@@ -766,14 +792,20 @@ function ancestor_2(state, arg1, arg2) {
         const _cpDepth1 = state.choiceStack.length;
         const _savedBindingsSize1 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, ancestor_2, 2);
+        pushChoicePoint(state, ancestor_2, 2, [arg1, arg2]);
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         if (unify(state, var__0, arg1) &&
             unify(state, var__1, arg2)) {
 
             do {
-    if (!parent_2(state, var__0, var__1)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!parent_2(state, var__0, var__1)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
             } while (false);
             if (!state.failed) return true;
         }
@@ -787,7 +819,8 @@ function ancestor_2(state, arg1, arg2) {
         const _cpDepth2 = state.choiceStack.length;
         const _savedBindingsSize2 = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, ancestor_2, 9999);
+        pushChoicePoint(state, ancestor_2, 9999, [arg1, arg2]);
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         const var__2 = createVar(state.nextVarId++);
@@ -795,8 +828,18 @@ function ancestor_2(state, arg1, arg2) {
             unify(state, var__1, arg2)) {
 
             do {
-    if (!parent_2(state, var__0, var__2)) { state.failed = true; break; }
-    if (!ancestor_2(state, var__2, var__1)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!parent_2(state, var__0, var__2)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!ancestor_2(state, var__2, var__1)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
             } while (false);
             if (!state.failed) return true;
         }
@@ -830,7 +873,7 @@ function member_2(state, arg1, arg2) {
         const _cpDepth1 = state.choiceStack.length;
         const _savedBindingsSize1 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, member_2, 2);
+        pushChoicePoint(state, member_2, 2, [arg1, arg2]);
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         if (unify(state, var__0, arg1) &&
@@ -848,7 +891,8 @@ function member_2(state, arg1, arg2) {
         const _cpDepth2 = state.choiceStack.length;
         const _savedBindingsSize2 = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, member_2, 9999);
+        pushChoicePoint(state, member_2, 9999, [arg1, arg2]);
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         const var__2 = createVar(state.nextVarId++);
@@ -856,7 +900,12 @@ function member_2(state, arg1, arg2) {
             unify(state, createList(var__1, var__2), arg2)) {
 
             do {
-    if (!member_2(state, var__0, var__2)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!member_2(state, var__0, var__2)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
             } while (false);
             if (!state.failed) return true;
         }
@@ -890,7 +939,7 @@ function append_3(state, arg1, arg2, arg3) {
         const _cpDepth1 = state.choiceStack.length;
         const _savedBindingsSize1 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, append_3, 2);
+        pushChoicePoint(state, append_3, 2, [arg1, arg2, arg3]);
         const var__0 = createVar(state.nextVarId++);
         if (unify(state, createNil(), arg1) &&
             unify(state, var__0, arg2) &&
@@ -908,7 +957,8 @@ function append_3(state, arg1, arg2, arg3) {
         const _cpDepth2 = state.choiceStack.length;
         const _savedBindingsSize2 = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, append_3, 9999);
+        pushChoicePoint(state, append_3, 9999, [arg1, arg2, arg3]);
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         const var__2 = createVar(state.nextVarId++);
@@ -918,7 +968,12 @@ function append_3(state, arg1, arg2, arg3) {
             unify(state, createList(var__0, var__3), arg3)) {
 
             do {
-    if (!append_3(state, var__1, var__2, var__3)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!append_3(state, var__1, var__2, var__3)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
             } while (false);
             if (!state.failed) return true;
         }
@@ -952,7 +1007,8 @@ function max_3(state, arg1, arg2, arg3) {
         const _cpDepth1 = state.choiceStack.length;
         const _savedBindingsSize1 = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, max_3, 2);
+        pushChoicePoint(state, max_3, 2, [arg1, arg2, arg3]);
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         if (unify(state, var__0, arg1) &&
@@ -960,7 +1016,12 @@ function max_3(state, arg1, arg2, arg3) {
             unify(state, var__0, arg3)) {
 
             do {
-    if (!gte_2(state, var__0, var__1)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!gte_2(state, var__0, var__1)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
     performCut(state);
             } while (false);
             if (!state.failed) return true;
@@ -975,7 +1036,7 @@ function max_3(state, arg1, arg2, arg3) {
         const _cpDepth2 = state.choiceStack.length;
         const _savedBindingsSize2 = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, max_3, 9999);
+        pushChoicePoint(state, max_3, 9999, [arg1, arg2, arg3]);
         const var__0 = createVar(state.nextVarId++);
         const var__1 = createVar(state.nextVarId++);
         if (unify(state, var__0, arg1) &&
@@ -997,56 +1058,161 @@ function main_0(state) {
     {
         const _cpDepth = state.choiceStack.length;
         const _savedBindingsSize = state.bindings.length;
+        const _bodyCp = state.choiceStack.length;
         const var__0 = createVar(state.nextVarId++);
         {
 
             do {
-    if (!write_1(state, createAtom("=== Family Relationships ==="))) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("=== Family Relationships ==="))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
     /* If-then-else */
     {
         const _ite_saved = state.bindings.length;
-    if (!grandparent_2(state, createAtom("tom"), createAtom("ann"))) { state.failed = true; break; }
-
+        const _ite_cp0 = state.choiceStack.length;
+        (function() { do {
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!grandparent_2(state, createAtom("tom"), createAtom("ann"))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+        } while (false); })();
         if (!state.failed) {
-            /* Condition succeeded, execute then branch */
-    if (!write_1(state, createAtom("grandparent(tom, ann) = true"))) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
-
+            /* Condition succeeded: commit (cut alternatives), execute then-branch */
+            while (state.choiceStack.length > _ite_cp0) state.choiceStack.pop();
+            do {
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("grandparent(tom, ann) = true"))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+            } while (false);
         } else {
             /* Condition failed, execute else branch */
             state.bindings = state.bindings.slice(0, _ite_saved);
+            while (state.choiceStack.length > _ite_cp0) state.choiceStack.pop();
             state.failed = false;
-    if (!write_1(state, createAtom("grandparent(tom, ann) = false"))) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
-
+            do {
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("grandparent(tom, ann) = false"))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+            } while (false);
         }
+        if (state.failed) break;
     }
     /* If-then-else */
     {
         const _ite_saved = state.bindings.length;
-    if (!member_2(state, createAtom("bob"), createList(createAtom("tom"), createList(createAtom("bob"), createList(createAtom("liz"), createNil()))))) { state.failed = true; break; }
-
+        const _ite_cp0 = state.choiceStack.length;
+        (function() { do {
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!member_2(state, createAtom("bob"), createList(createAtom("tom"), createList(createAtom("bob"), createList(createAtom("liz"), createNil()))))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+        } while (false); })();
         if (!state.failed) {
-            /* Condition succeeded, execute then branch */
-    if (!write_1(state, createAtom("member(bob, [tom,bob,liz]) = true"))) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
-
+            /* Condition succeeded: commit (cut alternatives), execute then-branch */
+            while (state.choiceStack.length > _ite_cp0) state.choiceStack.pop();
+            do {
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("member(bob, [tom,bob,liz]) = true"))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+            } while (false);
         } else {
             /* Condition failed, execute else branch */
             state.bindings = state.bindings.slice(0, _ite_saved);
+            while (state.choiceStack.length > _ite_cp0) state.choiceStack.pop();
             state.failed = false;
-    if (!write_1(state, createAtom("member(bob, [tom,bob,liz]) = false"))) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
-
-        }
+            do {
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("member(bob, [tom,bob,liz]) = false"))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
     }
-    if (!max_3(state, createInt(3), createInt(5), var__0)) { state.failed = true; break; }
-    if (!write_1(state, createAtom("max(3,5) = "))) { state.failed = true; break; }
-    if (!write_1(state, var__0)) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
-    if (!write_1(state, createAtom("=== Done ==="))) { state.failed = true; break; }
-    if (!nl_0(state)) { state.failed = true; break; }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+            } while (false);
+        }
+        if (state.failed) break;
+    }
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!max_3(state, createInt(3), createInt(5), var__0)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("max(3,5) = "))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, var__0)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!write_1(state, createAtom("=== Done ==="))) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
+    /* retry loop: if goal fails, backtrack into an earlier choice point */
+    while (!nl_0(state)) {
+        state.failed = false;
+        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }
+    }
+    if (state.failed) break;
             } while (false);
             if (!state.failed) return true;
         }

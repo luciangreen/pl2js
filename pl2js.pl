@@ -74,11 +74,12 @@ function initState() {
     };
 }
 
-function pushChoicePoint(state, predId, clauseIdx) {
+function pushChoicePoint(state, predId, clauseIdx, callArgs) {
     state.choiceStack.push({
         predId: predId,
         clauseIdx: clauseIdx,
-        savedBindingsSize: state.bindings.length
+        savedBindingsSize: state.bindings.length,
+        callArgs: callArgs !== undefined ? callArgs : null
     });
 }
 
@@ -87,6 +88,23 @@ function popChoicePoint(state) {
     const cp = state.choiceStack.pop();
     state.bindings = state.bindings.slice(0, cp.savedBindingsSize);
     return true;
+}
+
+function _retryBody(state, minCpDepth) {
+    while (state.choiceStack.length > minCpDepth) {
+        const cp = state.choiceStack[state.choiceStack.length - 1];
+        /* Skip choice points that have no stored callArgs (e.g. disjunction
+           markers pushed with null predId); they cannot be retried by
+           re-invoking a predicate, so just discard them and keep looking. */
+        if (!cp.callArgs) { state.choiceStack.pop(); continue; }
+        state.bindings = state.bindings.slice(0, cp.savedBindingsSize);
+        state.failed = false;
+        state.backtracking = true;
+        const result = cp.predId(state, ...cp.callArgs);
+        if (result && !state.failed) return true;
+        state.failed = false;
+    }
+    return false;
 }
 
 function performCut(state) {
@@ -184,8 +202,8 @@ function evalArithmetic(state, expr) {
             if (f === "**" || f === "^") return Math.pow(l, r) | 0;
             if (f === ">>")  return l >> r;
             if (f === "<<")  return l << r;
-            if (f === "/\\") return l & r;
-            if (f === "\\/") return l | r;
+            if (f === "/\\\\") return l & r;
+            if (f === "\\\\/") return l | r;
             if (f === "xor") return l ^ r;
             if (f === "min") return Math.min(l, r);
             if (f === "max") return Math.max(l, r);
@@ -202,7 +220,7 @@ function evalArithmetic(state, expr) {
             if (f === "round")    return Math.round(v);
             if (f === "truncate") return Math.trunc(v);
             if (f === "float_integer_part") return Math.trunc(v);
-            if (f === "\\")       return ~v;
+            if (f === "\\\\")       return ~v;
         }
     }
     return 0;
@@ -331,10 +349,10 @@ function write_1(state, arg1) {
 }
 function writeln_1(state, arg1) {
     _prologWrite(termToString(state, deref(state, arg1)));
-    _prologWrite("\n");
+    _prologWrite("\\n");
     return true;
 }
-function nl_0(state) { _prologWrite("\n"); return true; }
+function nl_0(state) { _prologWrite("\\n"); return true; }
 function tab_1(state, arg1) {
     const t = deref(state, arg1);
     if (t.type !== "int") { state.failed = true; return false; }
@@ -359,7 +377,7 @@ function format_2(state, arg1, arg2) {
                 }
                 i += 2;
             } else if (spec === "n") {
-                out += "\n"; i += 2;
+                out += "\\n"; i += 2;
             } else if (spec === "a") {
                 args = deref(state, args);
                 if (args.type === "list") {
@@ -720,7 +738,7 @@ translate_predicate_group(Name/Arity-Clauses, JSCode) :-
     format(atom(FuncName), '~w_~w', [SanitizedName, Arity]),
     length(Clauses, NumClauses),
     ( NumClauses > 1 ->
-        translate_nondeterministic_predicate(Clauses, FuncName, Params, JSCode)
+        translate_nondeterministic_predicate(Clauses, FuncName, Params, Arity, JSCode)
     ;
         translate_predicate_clauses(Clauses, 1, ClausesCode),
         format(atom(JSCode),
@@ -730,10 +748,11 @@ translate_predicate_group(Name/Arity-Clauses, JSCode) :-
 }', [FuncName, Params, ClausesCode])
     ).
 
-%% translate_nondeterministic_predicate(+Clauses, +FuncName, +Params, -JSCode)
-translate_nondeterministic_predicate(Clauses, FuncName, Params, JSCode) :-
+%% translate_nondeterministic_predicate(+Clauses, +FuncName, +Params, +Arity, -JSCode)
+translate_nondeterministic_predicate(Clauses, FuncName, Params, Arity, JSCode) :-
     length(Clauses, NumClauses),
-    translate_predicate_clauses_with_choicepoints(Clauses, FuncName, 1, NumClauses, ClausesCode),
+    generate_args_array(Arity, ArgsArr),
+    translate_predicate_clauses_with_choicepoints(Clauses, FuncName, 1, NumClauses, ArgsArr, ClausesCode),
     format(atom(JSCode),
 'function ~w(state~w) {
     /* Check if resuming from a choice point (only when backtracking) */
@@ -756,17 +775,17 @@ translate_nondeterministic_predicate(Clauses, FuncName, Params, JSCode) :-
     return false; /* No clause matched */
 }', [FuncName, Params, FuncName, ClausesCode]).
 
-%% translate_predicate_clauses_with_choicepoints(+Clauses, +FuncName, +Index, +Total, -JSCode)
-translate_predicate_clauses_with_choicepoints([], _, _, _, '').
-translate_predicate_clauses_with_choicepoints([Clause|Rest], FuncName, Index, Total, JSCode) :-
+%% translate_predicate_clauses_with_choicepoints(+Clauses, +FuncName, +Index, +Total, +ArgsArr, -JSCode)
+translate_predicate_clauses_with_choicepoints([], _, _, _, _, '').
+translate_predicate_clauses_with_choicepoints([Clause|Rest], FuncName, Index, Total, ArgsArr, JSCode) :-
     NextIndex is Index + 1,
     ( NextIndex > Total -> IsLast = true ; IsLast = false ),
-    translate_single_clause_with_choicepoint(Clause, FuncName, Index, IsLast, ClauseCode),
-    translate_predicate_clauses_with_choicepoints(Rest, FuncName, NextIndex, Total, RestCode),
+    translate_single_clause_with_choicepoint(Clause, FuncName, Index, IsLast, ArgsArr, ClauseCode),
+    translate_predicate_clauses_with_choicepoints(Rest, FuncName, NextIndex, Total, ArgsArr, RestCode),
     atomic_list_concat([ClauseCode, RestCode], '', JSCode).
 
-%% translate_single_clause_with_choicepoint(+Clause, +FuncName, +Index, +IsLast, -JSCode)
-translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast, JSCode) :-
+%% translate_single_clause_with_choicepoint(+Clause, +FuncName, +Index, +IsLast, +ArgsArr, -JSCode)
+translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast, ArgsArr, JSCode) :-
     !,
     term_variables((Head, Body), AllVars),
     create_var_map(AllVars),
@@ -786,7 +805,8 @@ translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast
         const _cpDepth~w = state.choiceStack.length;
         const _savedBindingsSize~w = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, ~w, 9999);
+        pushChoicePoint(state, ~w, 9999, ~w);
+        const _bodyCp = state.choiceStack.length;
 ~w~w
             do {
 ~w            } while (false);
@@ -797,7 +817,7 @@ translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast
         state.bindings = state.bindings.slice(0, _savedBindingsSize~w);
         state.failed = false;
     }
-', [Index, HeadDisp, BodyDisp, Index, Index, Index, FuncName, VarDecls, HeadCode, BodyCode, Index, Index])
+', [Index, HeadDisp, BodyDisp, Index, Index, Index, FuncName, ArgsArr, VarDecls, HeadCode, BodyCode, Index, Index])
             ;
                 format(atom(JSCode),
 '    /* Clause ~w: ~w :- ~w */
@@ -805,7 +825,8 @@ translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast
         const _cpDepth~w = state.choiceStack.length;
         const _savedBindingsSize~w = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, ~w, ~w);
+        pushChoicePoint(state, ~w, ~w, ~w);
+        const _bodyCp = state.choiceStack.length;
 ~w~w
             do {
 ~w            } while (false);
@@ -816,13 +837,13 @@ translate_single_clause_with_choicepoint((Head :- Body), FuncName, Index, IsLast
         state.bindings = state.bindings.slice(0, _savedBindingsSize~w);
         state.failed = false;
     }
-', [Index, HeadDisp, BodyDisp, Index, Index, Index, FuncName, NextIndex, VarDecls, HeadCode, BodyCode, Index, Index])
+', [Index, HeadDisp, BodyDisp, Index, Index, Index, FuncName, NextIndex, ArgsArr, VarDecls, HeadCode, BodyCode, Index, Index])
             )
         ),
         retractall(var_name_index_map(_, _))
     ).
 
-translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, JSCode) :-
+translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, ArgsArr, JSCode) :-
     % Fact (clause without body)
     term_variables(Head, AllVars),
     create_var_map(AllVars),
@@ -841,7 +862,7 @@ translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, JSCode) 
         const _cpDepth~w = state.choiceStack.length;
         const _savedBindingsSize~w = state.bindings.length;
         /* Push sentinel choice point before trying last clause */
-        pushChoicePoint(state, ~w, 9999);
+        pushChoicePoint(state, ~w, 9999, ~w);
 ~w~w
             return true;
         }
@@ -850,7 +871,7 @@ translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, JSCode) 
         state.bindings = state.bindings.slice(0, _savedBindingsSize~w);
         state.failed = false;
     }
-', [Index, HeadDisp, Index, Index, Index, FuncName, VarDecls, HeadCode, Index, Index])
+', [Index, HeadDisp, Index, Index, Index, FuncName, ArgsArr, VarDecls, HeadCode, Index, Index])
             ;
                 format(atom(JSCode),
 '    /* Clause ~w: ~w */
@@ -858,7 +879,7 @@ translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, JSCode) 
         const _cpDepth~w = state.choiceStack.length;
         const _savedBindingsSize~w = state.bindings.length;
         /* Push choice point for next clause before trying this one */
-        pushChoicePoint(state, ~w, ~w);
+        pushChoicePoint(state, ~w, ~w, ~w);
 ~w~w
             return true;
         }
@@ -867,7 +888,7 @@ translate_single_clause_with_choicepoint(Head, FuncName, Index, IsLast, JSCode) 
         state.bindings = state.bindings.slice(0, _savedBindingsSize~w);
         state.failed = false;
     }
-', [Index, HeadDisp, Index, Index, Index, FuncName, NextIndex, VarDecls, HeadCode, Index, Index])
+', [Index, HeadDisp, Index, Index, Index, FuncName, NextIndex, ArgsArr, VarDecls, HeadCode, Index, Index])
             )
         ),
         retractall(var_name_index_map(_, _))
@@ -929,6 +950,7 @@ translate_single_clause((Head :- Body), Index, JSCode) :-
     {
         const _cpDepth = state.choiceStack.length;
         const _savedBindingsSize = state.bindings.length;
+        const _bodyCp = state.choiceStack.length;
 ~w~w
             do {
 ~w            } while (false);
@@ -975,6 +997,15 @@ translate_single_clause(Head, Index, JSCode) :-
 extract_predicate_info(Term, Name, Arity, Args) :-
     Term =.. [Name|Args],
     length(Args, Arity).
+
+%% generate_args_array(+Arity, -ArgsArr)
+% Generates a JavaScript array literal "[arg1, arg2, ...]" for the given arity
+generate_args_array(0, '[]') :- !.
+generate_args_array(N, ArgsArr) :-
+    N > 0,
+    findall(A, (between(1, N, I), format(atom(A), 'arg~w', [I])), ArgList),
+    atomic_list_concat(ArgList, ', ', ArgsStr),
+    format(atom(ArgsArr), '[~w]', [ArgsStr]).
 
 %% translate_args_to_params(+Args, -Params)
 % Generates ", arg1, arg2, ..." for a JS function signature
@@ -1030,18 +1061,25 @@ translate_body((Cond -> Then ; Else), JSCode, Depth) :-
 '    /* If-then-else */
     {
         const _ite_saved = state.bindings.length;
-~w
+        const _ite_cp~w = state.choiceStack.length;
+        (function() { do {
+~w        } while (false); })();
         if (!state.failed) {
-            /* Condition succeeded, execute then branch */
-~w
+            /* Condition succeeded: commit (cut alternatives), execute then-branch */
+            while (state.choiceStack.length > _ite_cp~w) state.choiceStack.pop();
+            do {
+~w            } while (false);
         } else {
             /* Condition failed, execute else branch */
             state.bindings = state.bindings.slice(0, _ite_saved);
+            while (state.choiceStack.length > _ite_cp~w) state.choiceStack.pop();
             state.failed = false;
-~w
+            do {
+~w            } while (false);
         }
+        if (state.failed) break;
     }
-', [CondCode, ThenCode, ElseCode]).
+', [Depth, CondCode, Depth, ThenCode, Depth, ElseCode]).
 translate_body((A ; B), JSCode, Depth) :-
     !,
     NextDepth is Depth + 1,
@@ -1049,14 +1087,19 @@ translate_body((A ; B), JSCode, Depth) :-
     translate_body(B, BCode, NextDepth),
     format(atom(JSCode),
 '    /* Disjunction */
-    pushChoicePoint(state, null, 1);
-~w
-    if (state.failed) {
-        popChoicePoint(state);
-        state.failed = false;
-~w
+    {
+        const _disj_cp~w = state.choiceStack.length;
+        (function() { do {
+~w        } while (false); })();
+        if (state.failed) {
+            state.failed = false;
+            while (state.choiceStack.length > _disj_cp~w) state.choiceStack.pop();
+            do {
+~w            } while (false);
+        }
+        if (state.failed) break;
     }
-', [ACode, BCode]).
+', [Depth, ACode, Depth, BCode]).
 translate_body(findall(Template, Goal, Result), JSCode, Depth) :-
     !,
     translate_body(Goal, GoalCodeTemplate, Depth),
@@ -1124,7 +1167,7 @@ translate_body(Call, JSCode, _) :-
     sanitize_predicate_name(Name, SanitizedName),
     format(atom(FuncName), '~w_~w', [SanitizedName, Arity]),
     translate_call_args(Args, ArgStr),
-    format(atom(JSCode), '    if (!~w(state~w)) { state.failed = true; break; }\n', [FuncName, ArgStr]).
+    format(atom(JSCode), '    /* retry loop: if goal fails, backtrack into an earlier choice point */\n    while (!~w(state~w)) {\n        state.failed = false;\n        if (!_retryBody(state, _bodyCp)) { state.failed = true; break; }\n    }\n    if (state.failed) break;\n', [FuncName, ArgStr]).
 
 translate_call_args([], '').
 translate_call_args([Arg|Args], Result) :-
