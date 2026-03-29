@@ -216,6 +216,9 @@
       <li>Click <strong>Run Query</strong> to see results.</li>
       <li>Click <strong>Save .pl</strong> to download the current program.
           The editor remembers your text between visits. If you have unsaved changes, the page will warn you before leaving.</li>
+      <li>Click <strong>Save as HTML</strong> to export a fully self-contained HTML file that runs your program automatically.
+          The exported page embeds the pl2js runtime inline and calls <code>main/0</code> on load —
+          make sure your program defines a <code>main/0</code> predicate (e.g. <code>main :- write(hello), nl.</code>).</li>
     </ol>
   </div>
 
@@ -240,6 +243,7 @@ sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
       <input type="file" id="fileInput" accept=".pl,.txt,.pro" style="display:none">
       <button class="secondary" id="btnLoad">&#128193; Load .pl</button>
       <button class="secondary" id="btnSave">&#128190; Save .pl</button>
+      <button class="secondary" id="btnSaveHtml">&#128196; Save as HTML</button>
     </div>
     <div class="status-bar">
       <span id="unsaved-dot"></span>
@@ -280,6 +284,7 @@ sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
   const queryInput = document.getElementById('query');
   const btnLoad    = document.getElementById('btnLoad');
   const btnSave    = document.getElementById('btnSave');
+  const btnSaveHtml = document.getElementById('btnSaveHtml');
   const btnRun     = document.getElementById('btnRun');
   const fileInput  = document.getElementById('fileInput');
   const output     = document.getElementById('output');
@@ -374,6 +379,56 @@ sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
     unsavedDot.classList.remove('visible');
     statusText.textContent = 'Saved as program.pl';
   });
+
+  // ---- Save as HTML ----
+  btnSaveHtml.addEventListener('click', function () {
+    saveAsHtml().catch(function (err) {
+      showOutput('has-error', 'Save as HTML failed: ' + (err.message || String(err)));
+    });
+  });
+
+  async function saveAsHtml() {
+    const prog = editor.value;
+
+    // Warn if no main/0 predicate is defined.
+    const hasMain = pl2js.hasMainPredicate(prog);
+    if (!hasMain) {
+      const go = window.confirm(
+        'Reminder: your program does not define a main/0 predicate.\n\n' +
+        'The saved HTML page will try to call main/0 on load and will show ' +
+        'a reminder banner if it is missing.\n\n' +
+        'Continue saving anyway?'
+      );
+      if (!go) return;
+    }
+
+    // Fetch pl2js.js to embed inline.
+    let runtimeSrc;
+    try {
+      const resp = await fetch('pl2js.js');
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      runtimeSrc = await resp.text();
+    } catch (e) {
+      showOutput('has-error',
+        'Could not read pl2js.js for embedding: ' + e.message + '\n' +
+        '(If you opened this page via file://, serve the folder instead:\n' +
+        '  python3 -m http.server 8080\nthen open http://localhost:8080/index.html)');
+      return;
+    }
+
+    const html = pl2js.generateHtml(runtimeSrc, prog);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'program.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    statusText.textContent = 'Saved as program.html';
+  }
+
 
   // ---- Run query ----
   btnRun.addEventListener('click', runQuery);
