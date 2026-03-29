@@ -161,7 +161,7 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | Facts and rules | ✅ |
 | Atoms, integers, compound terms | ✅ |
 | Variables | ✅ |
-| Lists `[H\|T]`, `[]` | ✅ |
+| Lists `[H|T]`, `[]` | ✅ |
 | Conjunction `,` | ✅ |
 | Disjunction `;` | ✅ |
 | If-then-else `(Cond -> Then ; Else)` | ✅ |
@@ -231,7 +231,7 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | Atoms | ✅ |
 | Integers | ✅ |
 | Compound terms | ✅ |
-| Lists (`[H\|T]`, `[]`) | ✅ |
+| Lists (`[H|T]`, `[]`) | ✅ |
 | `is/2` and arithmetic (`+`, `-`, `*`, `/`, `//`, `mod`, `**`, bit ops) | ✅ |
 | Comparison (`>`, `<`, `>=`, `=<`) | ✅ |
 | Standard order comparison (`@<`, `@>`, `@=<`, `@>=`, `compare/3`) | ✅ |

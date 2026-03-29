@@ -1592,19 +1592,10 @@
     }
 
     // ---- Misc ----
-    if (f === 'succ_or_zero' && a === 2) {
-      const t = deref(env, goal.args[0]);
-      if (t.type === 'int') {
-        const e2 = copyEnv(env);
-        if (unify(e2, goal.args[1], mkInt(Math.max(0, t.val - 1)))) k(e2);
-      }
-      return;
-    }
     if (f === 'nb_getval' && a === 2) { return; } // not supported
     if (f === 'nb_setval' && a === 2) { k(env); return; } // no-op
     if (f === 'b_setval' && a === 2)  { k(env); return; }
     if (f === 'b_getval' && a === 2)  { return; }
-    if (f === 'succ_or_zero' && a === 2) { return; }
     if (f === 'read_term' && a === 2) { return; }
     if (f === 'with_output_to' && a === 2) {
       // simplified: run goal, capture into string, unify with first arg
@@ -1622,7 +1613,6 @@
       }
       return;
     }
-    if (f === 'msort' && a === 2) { return; }
     if (f === 'predsort' && a === 3) { return; }
     if (f === 'maplist' && a >= 2) {
       // maplist(Goal, List) or maplist(Goal, List, List2)
