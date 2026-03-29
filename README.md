@@ -200,4 +200,4 @@ The generated JS uses plain objects for terms and a mutable state object for bin
 
 ## License
 
-Same as the parent `pl2c` repository (see [../LICENSE](../LICENSE)).
+Same as the parent `pl2c` repository (see [LICENSE](https://github.com/luciangreen/pl2js/blob/main/LICENSE)).
