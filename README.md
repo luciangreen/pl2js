@@ -1,6 +1,6 @@
 # pl2js — Prolog to JavaScript Compiler
 
-`pl2js` is a source-to-source compiler that translates a Prolog source file into equivalent JavaScript code. It is based on the same overall design as [`pl2c`](../pl2c.pl), but targets JavaScript instead of C.
+`pl2js` is a source-to-source compiler that translates a Prolog source file into equivalent JavaScript code. It is based on the same overall design as [`pl2c`](https://github.com/luciangreen/pl2c), but targets JavaScript instead of C.
 
 The compiler reads Prolog clauses, groups them by predicate, and emits a self-contained JavaScript file that contains:
 
