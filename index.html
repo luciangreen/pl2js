@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pl2js — Prolog Browser Editor</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, sans-serif;
+      background: #f0f2f5;
+      color: #1a1a2e;
+      min-height: 100vh;
+      padding: 20px 16px 40px;
+    }
+
+    .page {
+      max-width: 820px;
+      margin: 0 auto;
+    }
+
+    /* ---- Header ---- */
+    header {
+      margin-bottom: 20px;
+    }
+    header h1 {
+      font-size: 1.7rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      letter-spacing: -0.5px;
+    }
+    header h1 span { color: #5271ff; }
+    .tagline {
+      font-size: 0.88rem;
+      color: #666;
+      margin-top: 4px;
+    }
+
+    /* ---- Instructions ---- */
+    .instructions {
+      background: #e8eeff;
+      border-left: 4px solid #5271ff;
+      border-radius: 0 8px 8px 0;
+      padding: 10px 14px;
+      margin-bottom: 18px;
+      font-size: 0.85rem;
+      color: #333;
+      line-height: 1.6;
+    }
+    .instructions ol { margin-left: 18px; }
+    .instructions li { margin-bottom: 2px; }
+    .instructions code {
+      background: #d4dcff;
+      border-radius: 3px;
+      padding: 1px 4px;
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      font-size: 0.83rem;
+    }
+
+    /* ---- Cards ---- */
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .card-label {
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #888;
+      margin-bottom: 8px;
+    }
+
+    /* ---- Editor ---- */
+    #editor {
+      width: 100%;
+      height: 220px;
+      font-family: "SF Mono", "Fira Code", "Cascadia Code", Menlo, monospace;
+      font-size: 0.88rem;
+      line-height: 1.5;
+      border: 1.5px solid #dde0e8;
+      border-radius: 8px;
+      padding: 10px 12px;
+      resize: vertical;
+      outline: none;
+      background: #fafbff;
+      color: #1a1a2e;
+      transition: border-color 0.15s;
+    }
+    #editor:focus { border-color: #5271ff; }
+
+    /* ---- File buttons row ---- */
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    button {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #5271ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 9px 18px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.08s;
+      white-space: nowrap;
+    }
+    button:hover  { background: #3d57e8; }
+    button:active { background: #2e44cc; transform: scale(0.98); }
+    button.secondary {
+      background: #eef0f8;
+      color: #444;
+    }
+    button.secondary:hover  { background: #dde0f0; }
+    button.secondary:active { background: #ccd0e8; transform: scale(0.98); }
+    button.run-btn {
+      background: #1ead6e;
+      flex: 1;
+      justify-content: center;
+    }
+    button.run-btn:hover  { background: #189d60; }
+    button.run-btn:active { background: #157f4e; }
+
+    /* ---- Query row ---- */
+    .query-row {
+      display: flex;
+      gap: 10px;
+      align-items: stretch;
+    }
+    #query {
+      flex: 1;
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      font-size: 0.9rem;
+      border: 1.5px solid #dde0e8;
+      border-radius: 8px;
+      padding: 9px 12px;
+      outline: none;
+      background: #fafbff;
+      color: #1a1a2e;
+      transition: border-color 0.15s;
+    }
+    #query:focus { border-color: #5271ff; }
+
+    /* ---- Results area ---- */
+    #output {
+      background: #111827;
+      color: #d1fae5;
+      border-radius: 8px;
+      padding: 14px 16px;
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 80px;
+      max-height: 340px;
+      overflow-y: auto;
+    }
+    #output.has-error { color: #fca5a5; }
+    #output.has-false { color: #f9a8d4; }
+
+    /* ---- Status bar ---- */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.78rem;
+      color: #999;
+      margin-top: 6px;
+    }
+    #unsaved-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #f59e0b;
+      display: none;
+    }
+    #unsaved-dot.visible { display: inline-block; }
+
+    /* ---- Footer ---- */
+    footer {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #bbb;
+      margin-top: 24px;
+    }
+    footer a { color: #5271ff; text-decoration: none; }
+
+    /* ---- Responsive ---- */
+    @media (max-width: 500px) {
+      .btn-row { flex-wrap: wrap; }
+      button { flex: 1 1 45%; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <h1>pl<span>2</span>js <span style="font-weight:300;font-size:1.1rem;color:#888;">— Prolog Browser Editor</span></h1>
+    <p class="tagline">Translate and run Prolog in your browser — no installation needed.</p>
+  </header>
+
+  <div class="instructions">
+    <ol>
+      <li>Type or paste a Prolog program into the editor, or click <strong>Load .pl</strong> to open a file.</li>
+      <li>Enter a query in the query field, e.g. <code>parent(X, Y).</code></li>
+      <li>Click <strong>Run Query</strong> to see results.</li>
+      <li>Click <strong>Save .pl</strong> to download the current program.
+          The editor remembers your text between visits. If you have unsaved changes, the page will warn you before leaving.</li>
+    </ol>
+  </div>
+
+  <!-- Prolog program editor -->
+  <div class="card">
+    <div class="card-label">Prolog Program</div>
+    <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off">% Example: family facts and rules
+parent(tom, bob).
+parent(tom, liz).
+parent(bob, ann).
+parent(bob, pat).
+parent(pat, jim).
+
+grandparent(X, Z) :- parent(X, Y), parent(Y, Z).
+
+ancestor(X, Y) :- parent(X, Y).
+ancestor(X, Y) :- parent(X, Z), ancestor(Z, Y).
+
+sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
+</textarea>
+    <div class="btn-row">
+      <input type="file" id="fileInput" accept=".pl,.txt,.pro" style="display:none">
+      <button class="secondary" id="btnLoad">&#128193; Load .pl</button>
+      <button class="secondary" id="btnSave">&#128190; Save .pl</button>
+    </div>
+    <div class="status-bar">
+      <span id="unsaved-dot"></span>
+      <span id="status-text">Ready.</span>
+    </div>
+  </div>
+
+  <!-- Query and Run -->
+  <div class="card">
+    <div class="card-label">Query</div>
+    <div class="query-row">
+      <input type="text" id="query" placeholder="e.g. grandparent(X, Z)." value="grandparent(X, Z)." spellcheck="false" autocomplete="off">
+      <button class="run-btn" id="btnRun">&#9654; Run Query</button>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div class="card">
+    <div class="card-label">Results</div>
+    <pre id="output">(press Run Query to see results)</pre>
+  </div>
+
+  <footer>
+    <a href="https://github.com/luciangreen/pl2js" target="_blank">pl2js</a>
+    &mdash; Prolog-to-JavaScript browser translator
+    &mdash; translator-style, not a full interpreter
+  </footer>
+
+</div><!-- .page -->
+
+<script src="pl2js.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---- DOM references ----
+  const editor     = document.getElementById('editor');
+  const queryInput = document.getElementById('query');
+  const btnLoad    = document.getElementById('btnLoad');
+  const btnSave    = document.getElementById('btnSave');
+  const btnRun     = document.getElementById('btnRun');
+  const fileInput  = document.getElementById('fileInput');
+  const output     = document.getElementById('output');
+  const statusText = document.getElementById('status-text');
+  const unsavedDot = document.getElementById('unsaved-dot');
+
+  // ---- State ----
+  let savedContent = editor.value; // content at last file-save
+  let dirty = false;               // unsaved changes relative to savedContent
+
+  // ---- localStorage persistence ----
+  const LS_PROG  = 'pl2js_program';
+  const LS_QUERY = 'pl2js_query';
+
+  (function restoreFromStorage() {
+    try {
+      const prog  = localStorage.getItem(LS_PROG);
+      const query = localStorage.getItem(LS_QUERY);
+      if (prog  !== null) editor.value     = prog;
+      if (query !== null) queryInput.value = query;
+      savedContent = editor.value;
+    } catch (e) { /* localStorage unavailable */ }
+  })();
+
+  function saveToStorage() {
+    try {
+      localStorage.setItem(LS_PROG,  editor.value);
+      localStorage.setItem(LS_QUERY, queryInput.value);
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---- Dirty tracking ----
+  function markDirty() {
+    if (editor.value !== savedContent) {
+      dirty = true;
+      unsavedDot.classList.add('visible');
+      statusText.textContent = 'Unsaved changes.';
+    } else {
+      dirty = false;
+      unsavedDot.classList.remove('visible');
+      statusText.textContent = 'Ready.';
+    }
+    saveToStorage();
+  }
+
+  editor.addEventListener('input', markDirty);
+  queryInput.addEventListener('input', saveToStorage);
+
+  // ---- Before-unload warning ----
+  window.addEventListener('beforeunload', function (e) {
+    if (dirty) {
+      e.preventDefault();
+      e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+      return e.returnValue;
+    }
+  });
+
+  // ---- Load file ----
+  btnLoad.addEventListener('click', function () { fileInput.click(); });
+
+  fileInput.addEventListener('change', function () {
+    const file = fileInput.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      editor.value = e.target.result;
+      savedContent = editor.value; // loaded file is "saved"
+      dirty = false;
+      unsavedDot.classList.remove('visible');
+      statusText.textContent = 'Loaded: ' + file.name;
+      saveToStorage();
+      output.textContent = '(program loaded — enter a query and click Run)';
+      output.className = '';
+    };
+    reader.readAsText(file);
+    fileInput.value = ''; // reset so same file can be reloaded
+  });
+
+  // ---- Save file ----
+  btnSave.addEventListener('click', function () {
+    const blob = new Blob([editor.value], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = 'program.pl';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    savedContent = editor.value;
+    dirty = false;
+    unsavedDot.classList.remove('visible');
+    statusText.textContent = 'Saved as program.pl';
+  });
+
+  // ---- Run query ----
+  btnRun.addEventListener('click', runQuery);
+  queryInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') runQuery();
+  });
+
+  function runQuery() {
+    const prog  = editor.value;
+    const query = queryInput.value.trim();
+
+    if (!query) {
+      showOutput('(please enter a query)', '');
+      return;
+    }
+
+    if (!window.pl2js) {
+      showOutput(null, 'Error: pl2js.js is not loaded.\nIf you are opening this file directly (file://), try serving the folder with:\n  python3 -m http.server 8080\nthen open http://localhost:8080/index.html');
+      return;
+    }
+
+    output.textContent = '(running…)';
+    output.className = '';
+
+    // Run asynchronously to allow the UI to update first
+    setTimeout(function () {
+      let result;
+      try {
+        result = pl2js.runQuery(prog, query, 10);
+      } catch (e) {
+        showOutput(null, 'Unexpected error: ' + e.message);
+        return;
+      }
+
+      formatAndShow(result, query);
+    }, 0);
+  }
+
+  function formatAndShow(result, queryStr) {
+    let text = '';
+    let cls  = '';
+
+    // Captured I/O output (write/nl/writeln)
+    if (result.output) {
+      text += '--- output ---\n' + result.output;
+      if (!result.output.endsWith('\n')) text += '\n';
+      text += '--------------\n';
+    }
+
+    if (result.error) {
+      text += 'Error: ' + result.error;
+      cls = 'has-error';
+    } else if (!result.answers || result.answers.length === 0) {
+      // Check if query had variables
+      const hasVars = /\b[A-Z][A-Za-z0-9_]*/.test(queryStr);
+      text += hasVars ? 'false.\n(no solutions found)' : 'false.';
+      cls = 'has-false';
+    } else {
+      const answers = result.answers;
+      const hasVars = Object.keys(answers[0]).length > 0;
+
+      if (!hasVars) {
+        // No variables in query — just report true/how many
+        text += 'true.';
+        if (answers.length > 1) text += ' (' + answers.length + ' solutions)';
+      } else {
+        answers.forEach(function (bindings, i) {
+          const pairs = Object.entries(bindings)
+            .map(function (kv) { return kv[0] + ' = ' + kv[1]; })
+            .join(',\n');
+          text += pairs + '\n';
+          if (i < answers.length - 1) text += ';\n';
+        });
+        text += '\ntrue.';
+        if (answers.length === 10) {
+          text += '\n(showing first 10 answers — more may exist)';
+        }
+      }
+    }
+
+    showOutput(cls, text.trim());
+  }
+
+  function showOutput(cls, text) {
+    output.textContent = text;
+    output.className   = cls || '';
+  }
+
+})();
+</script>
+</body>
+</html>
