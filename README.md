@@ -1,12 +1,31 @@
-# pl2js — Prolog to JavaScript Compiler
+# pl2js — Prolog to JavaScript Translator
 
-`pl2js` is a source-to-source compiler that translates a Prolog source file into equivalent JavaScript code. It is based on the same overall design as [`pl2c`](https://github.com/luciangreen/pl2c), but targets JavaScript instead of C.
+`pl2js` has two complementary parts:
 
-The compiler reads Prolog clauses, groups them by predicate, and emits a self-contained JavaScript file that contains:
+1. **`pl2js.pl`** — a SWI-Prolog source-to-source compiler that translates a Prolog file into a self-contained JavaScript file (same design as [`pl2c`](https://github.com/luciangreen/pl2c), targeting JavaScript instead of C).
 
-- A minimal runtime library (term representation, variable bindings, unification, choice points, backtracking, cut, arithmetic, and built-in predicates).
-- A generated JavaScript function for every predicate in the source file.
-- An entry point that calls `main/0` if it is defined.
+2. **`pl2js.js` + `index.html`** — a browser-side translator/runtime that lets you write, load, save, and run Prolog **directly in the browser** with no server or installation required.  The browser tool parses Prolog source text on the fly, builds a clause database, and executes queries against it — all in JavaScript.  It intentionally avoids building a full interpreter or WAM; instead it uses simple clause-structure iteration with explicit unification and continuation-passing backtracking.
+
+---
+
+## Quick start — browser editor (no installation needed)
+
+1. Clone or download the repository.
+2. Open **`index.html`** in any modern browser (Chrome, Firefox, Safari, Edge).
+3. Type or paste a Prolog program in the editor, or click **Load .pl** to open a file.
+4. Enter a query in the query box (e.g. `grandparent(X, Z).`) and click **Run Query**.
+5. Results appear immediately on the same screen.
+6. Click **Save .pl** to download the current program.
+
+> **Note — file:// restrictions:** Most browsers allow loading `index.html` directly from the filesystem (file://). If you see no output or a script-load error, serve the folder with a local HTTP server instead:
+>
+> ```bash
+> # Python 3
+> python3 -m http.server 8080
+> # then open: http://localhost:8080/index.html
+> ```
+
+The editor automatically remembers your most recent program text and query in `localStorage`, so your work is preserved between visits. If you close or navigate away with unsaved changes, the page reminds you first.
 
 ---
 
@@ -14,25 +33,28 @@ The compiler reads Prolog clauses, groups them by predicate, and emits a self-co
 
 ```
 pl2js/
-  pl2js.pl           — Prolog-to-JavaScript compiler module
+  pl2js.js           — browser-side Prolog translator/runtime (NEW)
+  index.html         — standalone one-screen browser editor (NEW)
+  pl2js.pl           — SWI-Prolog source-to-source compiler module
   README.md          — this file
   examples/
-    family.pl        — sample Prolog source (family facts, rules, lists)
+    family.pl        — family facts and rules
     family.js        — compiled JavaScript output from family.pl
-    index.html       — minimal HTML page that runs queries in the browser
+    lists.pl         — list operations (member, append, reverse, …)
+    rules.pl         — rule chains, negation-as-failure, classification
+    index.html       — demo page for the pre-compiled family.js
 ```
 
 ---
 
 ## Requirements
 
-- **SWI-Prolog** (≥ 8.0) to run the compiler (`pl2js.pl`).
-- A modern web browser (Chrome, Firefox, Safari, Edge) to run the generated JavaScript.
-- **Node.js** (optional) to run the generated JavaScript from the command line.
-
+- **Browser editor (`pl2js.js` / `index.html`):** Any modern web browser — no installation.
+- **SWI-Prolog compiler (`pl2js.pl`):** SWI-Prolog ≥ 8.0.
+- **Node.js:** Optional — to run compiled `.js` files from the command line.
 ---
 
-## How to compile a `.pl` file to `.js`
+## How to compile a `.pl` file to `.js` (SWI-Prolog compiler)
 
 ### From SWI-Prolog
 
@@ -117,6 +139,69 @@ node hello.js
 
 ---
 
+## Public API — `pl2js.js` (browser translator)
+
+`pl2js.js` exposes a single global object `window.pl2js` (or `module.exports` in Node.js):
+
+```javascript
+const result = pl2js.runQuery(programSource, queryString, maxAnswers);
+// result: { ok, answers, output, error }
+//   ok:      true if at least one answer was found
+//   answers: array of { varName: stringValue } bindings
+//   output:  text written by write/nl/writeln
+//   error:   string if something went wrong, otherwise null
+```
+
+---
+
+## Supported Prolog subset — browser (`pl2js.js`)
+
+| Feature | Status |
+|---|---|
+| Facts and rules | ✅ |
+| Atoms, integers, compound terms | ✅ |
+| Variables | ✅ |
+| Lists `[H\|T]`, `[]` | ✅ |
+| Conjunction `,` | ✅ |
+| Disjunction `;` | ✅ |
+| If-then-else `(Cond -> Then ; Else)` | ✅ |
+| If-then `(Cond -> Then)` | ✅ |
+| Cut `!` | ✅ |
+| Negation as failure `\+` | ✅ |
+| Unification `=/2`, non-unification `\=/2` | ✅ |
+| Structural equality `==/2`, `\==/2` | ✅ |
+| Arithmetic `is/2`, `>/2`, `</2`, `>=/2`, `=</2`, `=:=/2`, `=\=/2` | ✅ |
+| `true/0`, `fail/0`, `nl/0`, `write/1`, `writeln/1`, `tab/1`, `format/2` | ✅ |
+| `atom/1`, `integer/1`, `number/1`, `var/1`, `nonvar/1`, `compound/1`, `atomic/1`, `is_list/1`, `ground/1` | ✅ |
+| `atom_concat/3`, `atom_length/2`, `atom_chars/2`, `atom_codes/2`, `char_code/2` | ✅ |
+| `functor/3`, `arg/3`, `=../2`, `copy_term/2` | ✅ |
+| `length/2`, `nth0/3`, `nth1/3`, `sort/2`, `msort/2` | ✅ |
+| `findall/3` | ✅ |
+| `bagof/3`, `setof/3` (simplified — no grouping by free vars) | ✅ partial |
+| `once/1`, `ignore/1`, `forall/2` | ✅ |
+| `call/1`, `call/N` | ✅ |
+| `maplist/2`, `maplist/3`, `include/3`, `exclude/3` | ✅ |
+| `succ/2`, `plus/3`, `between/3` | ✅ |
+| `compare/3`, `@</2`, `@>/2`, `@=</2`, `@>=/2` | ✅ |
+| Floats | ❌ (treated as integers) |
+| `assert/retract` (dynamic predicates) | ❌ |
+| Exceptions `throw/1`, `catch/3` | ❌ |
+| Operator declarations `op/3` | ❌ |
+| DCG `-->` | ❌ |
+| Full body backtracking across multiple nondeterministic calls | ✅ (supported via CPS) |
+| Recursion depth limit | 500 calls (configurable) |
+| Maximum answers per query | 10 (configurable) |
+
+### Known limitations
+
+- **Floats** are parsed but converted to integers (`3.14` becomes `3`).
+- **assert/retract** are silently ignored (dynamic databases not supported).
+- **Exceptions** (`throw/catch`) are not supported.
+- **Recursion depth** is limited to 500 to prevent browser hangs.
+- **ISO compliance** is not a goal; many edge cases differ from standard Prolog.
+
+---
+
 ## Public API (`pl2js.pl`)
 
 | Predicate | Description |
@@ -181,9 +266,21 @@ node hello.js
 
 ---
 
-## Design notes
+## Design notes — `pl2js.js` (browser translator)
 
-`pl2js.pl` follows the same pipeline as `pl2c.pl`:
+`pl2js.js` intentionally avoids building a new full interpreter, WAM, or bytecode engine. Instead:
+
+1. **Tokenize** the Prolog source into tokens (atoms, variables, numbers, operators, punctuation).
+2. **Parse** using a recursive-descent operator-precedence parser into JavaScript term data structures (`{type:'atom',name:'foo'}`, `{type:'compound',functor:'parent',arity:2,args:[…]}`, etc.).
+3. **Build a clause database**: group `{head, body}` pairs by predicate key (`name/arity`).
+4. **Execute queries** by iterating the clause database with explicit unification and continuation-passing backtracking. No virtual machine; each clause is tried in order by copying the environment and unifying the query with the clause head, then executing the body.
+5. **Variable renaming** gives every clause attempt fresh variable IDs so separate attempts don't share bindings.
+
+This is "translated executable structures, not a full independent runtime language engine" as required.
+
+---
+
+## Design notes — `pl2js.pl` (SWI-Prolog compiler)
 
 1. Read Prolog clauses with `read_term/3`.
 2. Group clauses by predicate signature (`Name/Arity`).
