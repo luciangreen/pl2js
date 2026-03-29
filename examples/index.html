@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pl2js – Prolog in JavaScript Demo</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f7;
+      color: #1d1d1f;
+      padding: 20px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 1.6rem; margin-bottom: 6px; }
+    h2 { font-size: 1.1rem; margin: 16px 0 6px; color: #444; }
+    p  { font-size: 0.9rem; color: #666; margin-bottom: 12px; }
+    .card {
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    button {
+      background: #0071e3;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 10px 20px;
+      font-size: 1rem;
+      cursor: pointer;
+      width: 100%;
+      margin-bottom: 10px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button:active { opacity: 0.85; }
+    pre {
+      background: #1e1e1e;
+      color: #d4d4d4;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      min-height: 48px;
+    }
+    input[type="text"] {
+      width: 100%;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 10px;
+      font-size: 1rem;
+      margin-bottom: 8px;
+      outline: none;
+    }
+    input[type="text"]:focus { border-color: #0071e3; }
+    .result-label { font-size: 0.8rem; color: #888; margin-bottom: 4px; }
+    footer { font-size: 0.75rem; color: #999; text-align: center; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <h1>pl2js Demo</h1>
+  <p>Prolog compiled to JavaScript – family facts and rules.</p>
+
+  <!-- Fixed query: run main/0 -->
+  <div class="card">
+    <h2>Run main/0</h2>
+    <p>Executes the compiled <code>main</code> predicate from <code>family.pl</code>.</p>
+    <button id="btnMain">Run main</button>
+    <div class="result-label">Output:</div>
+    <pre id="outMain">(press the button)</pre>
+  </div>
+
+  <!-- Interactive grandparent query -->
+  <div class="card">
+    <h2>Query: grandparent(X, Y)</h2>
+    <p>Enter two atom names to test <code>grandparent/2</code>.</p>
+    <input type="text" id="inGpX" placeholder="Ancestor (e.g. tom)" value="tom">
+    <input type="text" id="inGpY" placeholder="Descendant (e.g. ann)" value="ann">
+    <button id="btnGp">Check grandparent</button>
+    <div class="result-label">Result:</div>
+    <pre id="outGp">(enter names and press the button)</pre>
+  </div>
+
+  <!-- Interactive member query -->
+  <div class="card">
+    <h2>Query: member(X, List)</h2>
+    <p>Check if an atom is in the list <code>[tom, bob, liz, ann, pat, jim]</code>.</p>
+    <input type="text" id="inMember" placeholder="Element (e.g. bob)" value="bob">
+    <button id="btnMember">Check member</button>
+    <div class="result-label">Result:</div>
+    <pre id="outMember">(enter element and press the button)</pre>
+  </div>
+
+  <!-- ancestor query -->
+  <div class="card">
+    <h2>Query: ancestor(X, Y)</h2>
+    <p>Check if X is an ancestor of Y.</p>
+    <input type="text" id="inAncX" placeholder="Ancestor (e.g. tom)" value="tom">
+    <input type="text" id="inAncY" placeholder="Descendant (e.g. jim)" value="jim">
+    <button id="btnAnc">Check ancestor</button>
+    <div class="result-label">Result:</div>
+    <pre id="outAnc">(enter names and press the button)</pre>
+  </div>
+
+  <!-- Load the compiled Prolog program -->
+  <script src="family.js"></script>
+  <script>
+    // ---- helpers ----
+    function runAndCapture(fn) {
+      _prologOutput = "";
+      const state = initState();
+      const ok = fn(state) && !state.failed;
+      return { ok: ok, output: _prologOutput };
+    }
+
+    // ---- Run main ----
+    document.getElementById("btnMain").addEventListener("click", function() {
+      const r = runAndCapture(main_0);
+      document.getElementById("outMain").textContent =
+        r.output || (r.ok ? "(succeeded, no output)" : "(failed)");
+    });
+
+    // ---- grandparent query ----
+    document.getElementById("btnGp").addEventListener("click", function() {
+      const x = document.getElementById("inGpX").value.trim();
+      const y = document.getElementById("inGpY").value.trim();
+      if (!x || !y) { document.getElementById("outGp").textContent = "Please fill in both fields."; return; }
+      _prologOutput = "";
+      const state = initState();
+      const ok = grandparent_2(state, createAtom(x), createAtom(y)) && !state.failed;
+      document.getElementById("outGp").textContent =
+        "grandparent(" + x + ", " + y + ") = " + (ok ? "true" : "false");
+    });
+
+    // ---- member query ----
+    document.getElementById("btnMember").addEventListener("click", function() {
+      const elem = document.getElementById("inMember").value.trim();
+      if (!elem) { document.getElementById("outMember").textContent = "Please enter an element."; return; }
+      const list = createList(createAtom("tom"),
+                   createList(createAtom("bob"),
+                   createList(createAtom("liz"),
+                   createList(createAtom("ann"),
+                   createList(createAtom("pat"),
+                   createList(createAtom("jim"), createNil()))))));
+      _prologOutput = "";
+      const state = initState();
+      const ok = member_2(state, createAtom(elem), list) && !state.failed;
+      document.getElementById("outMember").textContent =
+        "member(" + elem + ", [tom,bob,liz,ann,pat,jim]) = " + (ok ? "true" : "false");
+    });
+
+    // ---- ancestor query ----
+    document.getElementById("btnAnc").addEventListener("click", function() {
+      const x = document.getElementById("inAncX").value.trim();
+      const y = document.getElementById("inAncY").value.trim();
+      if (!x || !y) { document.getElementById("outAnc").textContent = "Please fill in both fields."; return; }
+      _prologOutput = "";
+      const state = initState();
+      const ok = ancestor_2(state, createAtom(x), createAtom(y)) && !state.failed;
+      document.getElementById("outAnc").textContent =
+        "ancestor(" + x + ", " + y + ") = " + (ok ? "true" : "false");
+    });
+  </script>
+
+  <footer>pl2js &mdash; Prolog-to-JavaScript source-to-source compiler</footer>
+</body>
+</html>
