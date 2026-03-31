@@ -166,7 +166,7 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | Facts and rules | ✅ |
 | Atoms, integers, compound terms | ✅ |
 | Variables | ✅ |
-| Lists `[H|T]`, `[]` | ✅ |
+| Lists `[H\|T]`, `[]` | ✅ |
 | Conjunction `,` | ✅ |
 | Disjunction `;` | ✅ |
 | If-then-else `(Cond -> Then ; Else)` | ✅ |
