@@ -1,0 +1,10 @@
+{
+  "name": "pl2js",
+  "version": "1.0.0",
+  "description": "Prolog-to-JavaScript browser translator/runtime",
+  "main": "pl2js.js",
+  "scripts": {
+    "test": "node test_pl2js.js"
+  },
+  "license": "MIT"
+}

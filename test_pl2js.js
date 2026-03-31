@@ -1,0 +1,1378 @@
+/**
+ * test_pl2js.js — Test suite for pl2js.js
+ *
+ * Run with: node test_pl2js.js
+ *
+ * Tests the public API exposed by pl2js.js:
+ *   runQuery(programSource, queryString, maxAnswers)
+ *   tokenize(src)
+ *   parsePrologSource(src)
+ *   buildDatabase(clauses)
+ *   hasMainPredicate(source)
+ *   generateHtml(runtimeSource, programSource)
+ *   termToString(term)
+ *
+ * Design note — ground-query ok flag:
+ *   pl2js.runQuery sets ok=true for any ground query (no query variables) that
+ *   completes without a JavaScript error, regardless of whether Prolog itself
+ *   succeeded or failed. This mirrors the design choice documented in
+ *   runQuery: "ok: true if at least one answer found (or no error)".
+ *   For ground queries we therefore check answers.length to distinguish
+ *   Prolog success (≥1 answer) from Prolog failure (0 answers).
+ *   The fails() helper encapsulates that pattern.
+ */
+
+'use strict';
+
+const assert = require('assert');
+const fs     = require('fs');
+const path   = require('path');
+
+const pl2js = require('./pl2js.js');
+
+// ---------------------------------------------------------------------------
+// Minimal test runner
+// ---------------------------------------------------------------------------
+
+let _passed = 0;
+let _failed = 0;
+
+function group(name) {
+  console.log('\n── ' + name + ' ──');
+}
+
+function test(description, fn) {
+  try {
+    fn();
+    _passed++;
+    console.log('  ✓ ' + description);
+  } catch (err) {
+    _failed++;
+    console.log('  ✗ ' + description);
+    console.log('      ' + (err && err.message ? err.message : String(err)));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Query helpers
+// ---------------------------------------------------------------------------
+
+/** Run a query and return the full result object. */
+function q(prog, query, max) {
+  return pl2js.runQuery(prog, query, max || 10);
+}
+
+/**
+ * Assert that the first answer's binding for varName equals expected string.
+ * Use this for queries that contain at least one named variable.
+ */
+function assertBinding(result, varName, expected) {
+  assert.ok(result.ok, 'query should succeed (ok=false, error=' + result.error + ')');
+  assert.ok(result.answers.length > 0, 'should have at least one answer');
+  assert.strictEqual(
+    result.answers[0][varName],
+    expected,
+    'binding ' + varName + ': expected ' + JSON.stringify(expected) +
+      ' got ' + JSON.stringify(result.answers[0][varName])
+  );
+}
+
+/**
+ * Returns true when the query produces NO solutions (Prolog failure).
+ *
+ * pl2js sets ok=true for ground queries even when Prolog fails, so we rely
+ * on answers.length instead of the ok flag for those cases.
+ */
+function fails(prog, query, max) {
+  const r = q(prog, query, max);
+  assert.strictEqual(r.error, null, 'expected no JS error but got: ' + r.error);
+  return r.answers.length === 0;
+}
+
+// ---------------------------------------------------------------------------
+// 1. Facts and simple queries
+// ---------------------------------------------------------------------------
+group('Facts and simple queries');
+
+test('simple atom fact succeeds', () => {
+  const r = q('likes(alice, chocolate).', 'likes(alice, chocolate).');
+  assert.ok(r.ok);
+  assert.strictEqual(r.error, null);
+});
+
+test('atom fact with wrong argument fails', () => {
+  assert.ok(fails('likes(alice, chocolate).', 'likes(alice, broccoli).'));
+});
+
+test('integer fact', () => {
+  const r = q('age(bob, 30).', 'age(bob, 30).');
+  assert.ok(r.ok);
+});
+
+test('fact with variable binding', () => {
+  const r = q('color(sky, blue).', 'color(sky, X).');
+  assertBinding(r, 'X', 'blue');
+});
+
+test('multiple facts — first match wins', () => {
+  const prog = 'color(rose, red). color(sky, blue).';
+  const r = q(prog, 'color(rose, X).');
+  assertBinding(r, 'X', 'red');
+});
+
+test('fact: integer binding', () => {
+  const r = q('val(42).', 'val(X).');
+  assertBinding(r, 'X', '42');
+});
+
+// ---------------------------------------------------------------------------
+// 2. Rules and rule chains
+// ---------------------------------------------------------------------------
+group('Rules and rule chains');
+
+const FAMILY = [
+  'parent(tom, bob).',
+  'parent(tom, liz).',
+  'parent(bob, ann).',
+  'parent(bob, pat).',
+  'grandparent(X, Z) :- parent(X, Y), parent(Y, Z).',
+].join('\n');
+
+test('simple rule succeeds', () => {
+  const r = q(FAMILY, 'grandparent(tom, ann).');
+  assert.ok(r.ok);
+});
+
+test('simple rule fails when no match', () => {
+  assert.ok(fails(FAMILY, 'grandparent(tom, tom).'));
+});
+
+test('rule with variable binding', () => {
+  const r = q(FAMILY, 'grandparent(tom, Z).', 1);
+  assertBinding(r, 'Z', 'ann');
+});
+
+test('multi-clause rule — ancestor', () => {
+  const prog = FAMILY +
+    '\nancestor(X,Y) :- parent(X,Y).' +
+    '\nancestor(X,Y) :- parent(X,Z), ancestor(Z,Y).';
+  const r = q(prog, 'ancestor(tom, ann).');
+  assert.ok(r.ok);
+});
+
+test('recursive rule terminates and fails when appropriate', () => {
+  const prog = FAMILY +
+    '\nancestor(X,Y) :- parent(X,Y).' +
+    '\nancestor(X,Y) :- parent(X,Z), ancestor(Z,Y).';
+  assert.ok(fails(prog, 'ancestor(ann, tom).'));
+});
+
+// ---------------------------------------------------------------------------
+// 3. Multiple answers / backtracking
+// ---------------------------------------------------------------------------
+group('Multiple answers and backtracking');
+
+test('multiple answers collected', () => {
+  const r = q(FAMILY, 'parent(tom, X).');
+  assert.ok(r.ok);
+  assert.strictEqual(r.answers.length, 2);
+  const vals = r.answers.map(a => a['X']);
+  assert.ok(vals.includes('bob'));
+  assert.ok(vals.includes('liz'));
+});
+
+test('maxAnswers limits results', () => {
+  const prog = 'p(1). p(2). p(3). p(4). p(5).';
+  const r = q(prog, 'p(X).', 3);
+  assert.strictEqual(r.answers.length, 3);
+});
+
+test('all answers for member/2', () => {
+  const prog = 'member(X,[X|_]). member(X,[_|T]) :- member(X,T).';
+  const r = q(prog, 'member(X, [a,b,c]).', 10);
+  assert.strictEqual(r.answers.length, 3);
+  const vals = r.answers.map(a => a['X']);
+  assert.deepStrictEqual(vals, ['a', 'b', 'c']);
+});
+
+// ---------------------------------------------------------------------------
+// 4. Conjunction
+// ---------------------------------------------------------------------------
+group('Conjunction');
+
+test('conjunction of two succeeding goals', () => {
+  const prog = 'a. b.';
+  const r = q(prog, 'a, b.');
+  assert.ok(r.ok);
+});
+
+test('conjunction fails when first goal fails', () => {
+  // Use a variable so ok properly reflects Prolog failure.
+  const prog = 'b.';
+  const r = q(prog, 'c, b, X = done.');
+  assert.ok(!r.ok);
+});
+
+test('conjunction fails when second goal fails', () => {
+  const prog = 'a.';
+  const r = q(prog, 'a, c, X = done.');
+  assert.ok(!r.ok);
+});
+
+test('conjunction with variable sharing', () => {
+  const prog = 'foo(1). bar(1, done).';
+  const r = q(prog, 'foo(X), bar(X, Y).');
+  assertBinding(r, 'Y', 'done');
+});
+
+// ---------------------------------------------------------------------------
+// 5. Disjunction
+// ---------------------------------------------------------------------------
+group('Disjunction');
+
+test('first branch succeeds', () => {
+  const r = q('a. b.', 'a ; b.');
+  assert.ok(r.ok);
+});
+
+test('second branch tried when first fails', () => {
+  const r = q('b.', 'c ; b.');
+  assert.ok(r.ok);
+});
+
+test('disjunction with variable binding from first branch', () => {
+  const r = q('', 'X = hello ; X = world.', 1);
+  assertBinding(r, 'X', 'hello');
+});
+
+test('disjunction collects answers from both branches', () => {
+  const r = q('', '(X = a ; X = b).', 10);
+  assert.strictEqual(r.answers.length, 2);
+});
+
+// ---------------------------------------------------------------------------
+// 6. If-then-else
+// ---------------------------------------------------------------------------
+group('If-then-else');
+
+test('condition true — then branch taken', () => {
+  const r = q('', '(1 > 0 -> X = yes ; X = no).');
+  assertBinding(r, 'X', 'yes');
+});
+
+test('condition false — else branch taken', () => {
+  const r = q('', '(0 > 1 -> X = yes ; X = no).');
+  assertBinding(r, 'X', 'no');
+});
+
+test('if-then-else with user predicate condition', () => {
+  const prog = 'big(elephant).';
+  const r = q(prog, '(big(elephant) -> X = large ; X = small).');
+  assertBinding(r, 'X', 'large');
+});
+
+// ---------------------------------------------------------------------------
+// 7. If-then (no else)
+// ---------------------------------------------------------------------------
+group('If-then (no else)');
+
+test('if-then: condition true succeeds', () => {
+  const r = q('', '(1 =:= 1 -> X = ok).');
+  assertBinding(r, 'X', 'ok');
+});
+
+test('if-then: condition false — query fails', () => {
+  const r = q('', '(1 =:= 2 -> X = ok).');
+  assert.ok(!r.ok);
+});
+
+// ---------------------------------------------------------------------------
+// 8. Cut
+// ---------------------------------------------------------------------------
+group('Cut (!)');
+
+test('cut stops further backtracking into clauses', () => {
+  const prog = 'max(X, Y, X) :- X >= Y, !.\nmax(_, Y, Y).';
+  const r = q(prog, 'max(5, 3, M).');
+  assertBinding(r, 'M', '5');
+});
+
+test('cut: second clause chosen when first cut not reached', () => {
+  const prog = 'max(X, Y, X) :- X >= Y, !.\nmax(_, Y, Y).';
+  const r = q(prog, 'max(2, 7, M).');
+  assertBinding(r, 'M', '7');
+});
+
+test('cut limits number of answers', () => {
+  const prog = [
+    'first(X) :- member(X,[1,2,3]), !.',
+    'member(X,[X|_]).',
+    'member(X,[_|T]) :- member(X,T).',
+  ].join('\n');
+  const r = q(prog, 'first(X).', 10);
+  assert.strictEqual(r.answers.length, 1);
+  assertBinding(r, 'X', '1');
+});
+
+// ---------------------------------------------------------------------------
+// 9. Negation as failure (\+)
+// ---------------------------------------------------------------------------
+group('Negation as failure (\\+)');
+
+test('\\+ fails for provable goal', () => {
+  // Use a variable so ok properly reflects Prolog failure.
+  const r = q('a.', 'X = check, \\+ a.');
+  assert.ok(!r.ok);
+});
+
+test('\\+ succeeds for unprovable goal', () => {
+  const r = q('a.', '\\+ b.');
+  assert.ok(r.ok);
+});
+
+test('negation in rule body — can_fly(tweety) succeeds', () => {
+  const prog = 'bird(tweety). penguin(sam). bird(sam).\ncan_fly(X) :- bird(X), \\+ penguin(X).';
+  assert.ok(q(prog, 'can_fly(tweety).').ok);
+});
+
+test('negation in rule body — can_fly(sam) fails', () => {
+  const prog = 'bird(tweety). penguin(sam). bird(sam).\ncan_fly(X) :- bird(X), \\+ penguin(X).';
+  assert.ok(fails(prog, 'can_fly(sam).'));
+});
+
+// ---------------------------------------------------------------------------
+// 10. Unification
+// ---------------------------------------------------------------------------
+group('Unification (=, \\=, ==, \\==)');
+
+test('= unifies atoms', () => {
+  const r = q('', 'foo = foo.');
+  assert.ok(r.ok);
+});
+
+test('= binds variable', () => {
+  const r = q('', 'X = hello.');
+  assertBinding(r, 'X', 'hello');
+});
+
+test('= fails on mismatch', () => {
+  // Variable-based failure: X binds then second unification fails.
+  const r = q('', 'X = foo, X = bar.');
+  assert.ok(!r.ok);
+});
+
+test('\\= succeeds when not unifiable', () => {
+  const r = q('', 'foo \\= bar.');
+  assert.ok(r.ok);
+});
+
+test('\\= fails when unifiable', () => {
+  const r = q('', 'X \\= X.');
+  assert.ok(!r.ok);
+});
+
+test('== structural equality succeeds', () => {
+  const r = q('', 'foo == foo.');
+  assert.ok(r.ok);
+});
+
+test('== structural equality fails for unbound var vs atom', () => {
+  const r = q('', 'X == foo.');
+  assert.ok(!r.ok);
+});
+
+test('\\== structural inequality succeeds for different atoms', () => {
+  const r = q('', 'foo \\== bar.');
+  assert.ok(r.ok);
+});
+
+test('\\== fails for identical atoms', () => {
+  // Use a variable to ensure the ok flag is meaningful.
+  const r = q('', 'X = foo, X \\== foo.');
+  assert.ok(!r.ok);
+});
+
+// ---------------------------------------------------------------------------
+// 11. Arithmetic
+// ---------------------------------------------------------------------------
+group('Arithmetic (is/2, >, <, >=, =<, =:=, =\\=)');
+
+test('is/2 addition', () => {
+  assertBinding(q('', 'X is 3 + 4.'), 'X', '7');
+});
+
+test('is/2 subtraction', () => {
+  assertBinding(q('', 'X is 10 - 3.'), 'X', '7');
+});
+
+test('is/2 multiplication', () => {
+  assertBinding(q('', 'X is 6 * 7.'), 'X', '42');
+});
+
+test('is/2 integer division (/)', () => {
+  // Note: the // token is not recognised by the tokenizer; / performs
+  // Math.trunc integer division, which is the same result.
+  assertBinding(q('', 'X is 10 / 3.'), 'X', '3');
+});
+
+test('is/2 modulo', () => {
+  assertBinding(q('', 'X is 10 mod 3.'), 'X', '1');
+});
+
+test('is/2 nested expression', () => {
+  assertBinding(q('', 'X is (2 + 3) * 4.'), 'X', '20');
+});
+
+test('is/2 abs', () => {
+  assertBinding(q('', 'X is abs(-5).'), 'X', '5');
+});
+
+test('is/2 sign', () => {
+  assertBinding(q('', 'X is sign(-3).'), 'X', '-1');
+});
+
+test('> succeeds when left > right', () => {
+  assert.ok(q('', '5 > 3.').ok);
+});
+
+test('> fails when left <= right', () => {
+  assert.ok(fails('', '3 > 5.'));
+});
+
+test('< succeeds when left < right', () => {
+  assert.ok(q('', '2 < 10.').ok);
+});
+
+test('< fails when left >= right', () => {
+  assert.ok(fails('', '10 < 2.'));
+});
+
+test('>= succeeds for equal or greater', () => {
+  assert.ok(q('', '5 >= 5.').ok);
+  assert.ok(q('', '6 >= 5.').ok);
+});
+
+test('>= fails when left < right', () => {
+  assert.ok(fails('', '4 >= 5.'));
+});
+
+test('=< succeeds for equal or less', () => {
+  assert.ok(q('', '5 =< 5.').ok);
+  assert.ok(q('', '4 =< 5.').ok);
+});
+
+test('=< fails when left > right', () => {
+  assert.ok(fails('', '6 =< 5.'));
+});
+
+test('=:= arithmetic equality succeeds', () => {
+  assert.ok(q('', '3 + 2 =:= 5.').ok);
+});
+
+test('=:= arithmetic equality fails', () => {
+  assert.ok(fails('', '3 + 2 =:= 6.'));
+});
+
+test('=\\= arithmetic inequality succeeds', () => {
+  assert.ok(q('', '3 + 2 =\\= 6.').ok);
+});
+
+test('=\\= arithmetic inequality fails', () => {
+  assert.ok(fails('', '3 + 2 =\\= 5.'));
+});
+
+test('bit operators: /\\, \\/, <<, >>', () => {
+  assertBinding(q('', 'X is 5 /\\ 3.'), 'X', '1');
+  assertBinding(q('', 'X is 5 \\/ 3.'), 'X', '7');
+  assertBinding(q('', 'X is 1 << 3.'), 'X', '8');
+  assertBinding(q('', 'X is 8 >> 2.'), 'X', '2');
+});
+
+test('min/max in arithmetic', () => {
+  assertBinding(q('', 'X is min(3, 7).'), 'X', '3');
+  assertBinding(q('', 'X is max(3, 7).'), 'X', '7');
+});
+
+// ---------------------------------------------------------------------------
+// 12. Type checks
+// ---------------------------------------------------------------------------
+group('Type checks');
+
+test('atom/1 — succeeds for atom and empty list', () => {
+  assert.ok(q('', 'atom(hello).').ok);
+  assert.ok(q('', 'atom([]).').ok);
+});
+
+test('atom/1 — fails for integer', () => {
+  // Introduce variable so ok flag reflects Prolog result.
+  const r = q('', 'X = 42, atom(X).');
+  assert.ok(!r.ok);
+});
+
+test('atom/1 — fails for compound', () => {
+  const r = q('', 'X = f(x), atom(X).');
+  assert.ok(!r.ok);
+});
+
+test('integer/1 — succeeds for integers', () => {
+  assert.ok(q('', 'integer(42).').ok);
+});
+
+test('integer/1 — fails for atom', () => {
+  assert.ok(fails('', 'integer(hello).'));
+});
+
+test('number/1 — same as integer for this runtime', () => {
+  assert.ok(q('', 'number(7).').ok);
+});
+
+test('number/1 — fails for atom', () => {
+  assert.ok(fails('', 'number(foo).'));
+});
+
+test('var/1 — succeeds for unbound variable', () => {
+  assert.ok(q('', 'var(X).').ok);
+});
+
+test('var/1 — fails for atom', () => {
+  assert.ok(fails('', 'var(hello).'));
+});
+
+test('nonvar/1 — succeeds for bound term', () => {
+  assert.ok(q('', 'nonvar(hello).').ok);
+});
+
+test('nonvar/1 — fails for unbound variable', () => {
+  // X is unbound → nonvar fails → ok=false (variable-containing query).
+  const r = q('', 'nonvar(X).');
+  assert.ok(!r.ok);
+});
+
+test('compound/1 — succeeds for compound terms and lists', () => {
+  assert.ok(q('', 'compound(f(x)).').ok);
+  assert.ok(q('', 'compound([a,b]).').ok);
+});
+
+test('compound/1 — fails for atom', () => {
+  assert.ok(fails('', 'compound(hello).'));
+});
+
+test('compound/1 — fails for integer', () => {
+  assert.ok(fails('', 'compound(42).'));
+});
+
+test('atomic/1 — atoms, integers, empty list', () => {
+  assert.ok(q('', 'atomic(hello).').ok);
+  assert.ok(q('', 'atomic(42).').ok);
+  assert.ok(q('', 'atomic([]).').ok);
+});
+
+test('atomic/1 — fails for compound', () => {
+  assert.ok(fails('', 'atomic(f(x)).'));
+});
+
+test('is_list/1 — proper list', () => {
+  assert.ok(q('', 'is_list([]).').ok);
+  assert.ok(q('', 'is_list([1,2,3]).').ok);
+});
+
+test('is_list/1 — fails for non-list', () => {
+  assert.ok(fails('', 'is_list(hello).'));
+});
+
+test('ground/1 — ground terms', () => {
+  assert.ok(q('', 'ground(hello).').ok);
+  assert.ok(q('', 'ground(f(1,2)).').ok);
+});
+
+test('ground/1 — fails for term with unbound variable', () => {
+  // X is a query variable → unbound → not ground → ok=false.
+  const r = q('', 'ground(f(X,2)).');
+  assert.ok(!r.ok);
+});
+
+// ---------------------------------------------------------------------------
+// 13. I/O — output capture
+// ---------------------------------------------------------------------------
+group('I/O output capture');
+
+test('write/1 captures output', () => {
+  const r = q('', 'write(hello).');
+  assert.strictEqual(r.output, 'hello');
+});
+
+test('writeln/1 appends newline', () => {
+  const r = q('', 'writeln(hello).');
+  assert.strictEqual(r.output, 'hello\n');
+});
+
+test('nl/0 appends newline', () => {
+  const r = q('', 'write(hi), nl.');
+  assert.strictEqual(r.output, 'hi\n');
+});
+
+test('tab/1 appends spaces', () => {
+  const r = q('', 'tab(3).');
+  assert.strictEqual(r.output, '   ');
+});
+
+test('multiple write calls concatenate', () => {
+  const r = q('', 'write(a), write(b), write(c).');
+  assert.strictEqual(r.output, 'abc');
+});
+
+test('format/2 with ~w substitution', () => {
+  const r = q('', "format('Hello ~w!', [world]).");
+  assert.strictEqual(r.output, 'Hello world!');
+});
+
+test('format/2 with ~n newline', () => {
+  const r = q('', "format('line~n', []).");
+  assert.strictEqual(r.output, 'line\n');
+});
+
+test('format/1 with ~n newline', () => {
+  const r = q('', "format('done~n').");
+  assert.strictEqual(r.output, 'done\n');
+});
+
+// ---------------------------------------------------------------------------
+// 14. Lists
+// ---------------------------------------------------------------------------
+group('Lists');
+
+const LISTS_PROG = [
+  'member(X,[X|_]).',
+  'member(X,[_|T]) :- member(X,T).',
+  'append([],L,L).',
+  'append([H|T1],L2,[H|T3]) :- append(T1,L2,T3).',
+  'my_length([],0).',
+  'my_length([_|T],N) :- my_length(T,N1), N is N1+1.',
+  'my_reverse([],[]).',
+  'my_reverse([H|T],R) :- my_reverse(T,RT), append(RT,[H],R).',
+].join('\n');
+
+test('member succeeds for element in list', () => {
+  assert.ok(q(LISTS_PROG, 'member(2, [1,2,3]).').ok);
+});
+
+test('member fails for element not in list', () => {
+  // Ground query: use fails() helper.
+  assert.ok(fails(LISTS_PROG, 'member(5, [1,2,3]).'));
+});
+
+test('append two lists', () => {
+  assertBinding(q(LISTS_PROG, 'append([1,2],[3,4],L).'), 'L', '[1,2,3,4]');
+});
+
+test('length/2 built-in', () => {
+  assertBinding(q('', 'length([a,b,c], N).'), 'N', '3');
+});
+
+test('length/2 empty list', () => {
+  assertBinding(q('', 'length([], N).'), 'N', '0');
+});
+
+test('nth0/3', () => {
+  assertBinding(q('', 'nth0(0, [a,b,c], X).'), 'X', 'a');
+  assertBinding(q('', 'nth0(2, [a,b,c], X).'), 'X', 'c');
+});
+
+test('nth1/3', () => {
+  assertBinding(q('', 'nth1(1, [a,b,c], X).'), 'X', 'a');
+  assertBinding(q('', 'nth1(3, [a,b,c], X).'), 'X', 'c');
+});
+
+test('last/2', () => {
+  assertBinding(q('', 'last([1,2,3], X).'), 'X', '3');
+});
+
+test('sort/2 removes duplicates and sorts', () => {
+  assertBinding(q('', 'sort([3,1,2,1,3], S).'), 'S', '[1,2,3]');
+});
+
+test('msort/2 keeps duplicates', () => {
+  assertBinding(q('', 'msort([3,1,2,1], S).'), 'S', '[1,1,2,3]');
+});
+
+test('flatten/2', () => {
+  assertBinding(q('', 'flatten([1,[2,3],[4,[5]]], F).'), 'F', '[1,2,3,4,5]');
+});
+
+test('max_list/2', () => {
+  assertBinding(q('', 'max_list([3,1,4,1,5,9], M).'), 'M', '9');
+});
+
+test('min_list/2', () => {
+  assertBinding(q('', 'min_list([3,1,4,1,5,9], M).'), 'M', '1');
+});
+
+test('sum_list/2', () => {
+  assertBinding(q('', 'sum_list([1,2,3,4], S).'), 'S', '10');
+});
+
+test('numlist/3', () => {
+  assertBinding(q('', 'numlist(1,5,L).'), 'L', '[1,2,3,4,5]');
+});
+
+test('list_to_set/2', () => {
+  assertBinding(q('', 'list_to_set([1,2,1,3,2], S).'), 'S', '[1,2,3]');
+});
+
+test('subtract/3', () => {
+  assertBinding(q('', 'subtract([1,2,3,4], [2,4], D).'), 'D', '[1,3]');
+});
+
+test('intersection/3', () => {
+  assertBinding(q('', 'intersection([1,2,3], [2,3,4], I).'), 'I', '[2,3]');
+});
+
+test('union/3', () => {
+  assertBinding(q('', 'union([1,2], [2,3], U).'), 'U', '[1,2,3]');
+});
+
+test('delete/3', () => {
+  assertBinding(q('', 'delete([1,2,3,2,1], 2, D).'), 'D', '[1,3,1]');
+});
+
+// ---------------------------------------------------------------------------
+// 15. findall/3
+// ---------------------------------------------------------------------------
+group('findall/3');
+
+test('findall collects all solutions', () => {
+  const prog = 'color(red). color(green). color(blue).';
+  const r = q(prog, 'findall(X, color(X), Xs).');
+  assertBinding(r, 'Xs', '[red,green,blue]');
+});
+
+test('findall returns [] when goal fails', () => {
+  assertBinding(q('', 'findall(X, fail, Xs).'), 'Xs', '[]');
+});
+
+test('findall with template transformation', () => {
+  const prog = 'num(1). num(2). num(3).';
+  const r = q(prog, 'findall(X-X, num(X), Ps).');
+  assert.ok(r.ok);
+  assert.strictEqual(r.answers[0]['Ps'], '[(1-1),(2-2),(3-3)]');
+});
+
+// ---------------------------------------------------------------------------
+// 16. bagof/3 and setof/3
+// ---------------------------------------------------------------------------
+group('bagof/3 and setof/3 (simplified)');
+
+test('bagof collects answers', () => {
+  const prog = 'val(3). val(1). val(2).';
+  assertBinding(q(prog, 'bagof(X, val(X), Xs).'), 'Xs', '[3,1,2]');
+});
+
+test('setof returns sorted unique answers', () => {
+  const prog = 'val(3). val(1). val(2). val(1).';
+  assertBinding(q(prog, 'setof(X, val(X), Xs).'), 'Xs', '[1,2,3]');
+});
+
+// ---------------------------------------------------------------------------
+// 17. once/1, ignore/1, forall/2
+// ---------------------------------------------------------------------------
+group('once/1, ignore/1, forall/2');
+
+test('once/1 returns only one answer', () => {
+  const prog = 'p(1). p(2). p(3).';
+  const r = q(prog, 'once(p(X)).', 10);
+  assert.strictEqual(r.answers.length, 1);
+  assertBinding(r, 'X', '1');
+});
+
+test('ignore/1 succeeds even when inner goal fails', () => {
+  const r = q('', 'ignore(fail).');
+  assert.ok(r.ok);
+});
+
+test('ignore/1 succeeds when inner goal succeeds', () => {
+  const r = q('', 'ignore(true).');
+  assert.ok(r.ok);
+});
+
+test('forall/2 succeeds when all satisfy condition', () => {
+  const prog = 'num(2). num(4). num(6).';
+  const r = q(prog, 'forall(num(X), 0 =:= X mod 2).');
+  assert.ok(r.ok);
+});
+
+test('forall/2 fails when some do not satisfy', () => {
+  const prog = 'num(2). num(3). num(6).';
+  const r = q(prog, 'forall(num(X), 0 =:= X mod 2).');
+  assert.ok(!r.ok);
+});
+
+// ---------------------------------------------------------------------------
+// 18. call/N
+// ---------------------------------------------------------------------------
+group('call/N');
+
+test('call/1 executes true', () => {
+  assert.ok(q('', 'call(true).').ok);
+});
+
+test('call/1 executes fail — goal fails', () => {
+  // fail is an atom with no variables; use fails() helper.
+  assert.ok(fails('', 'call(fail).'));
+});
+
+test('call/2 applies extra argument', () => {
+  const prog = 'greet(X) :- write(X).';
+  const r = q(prog, 'call(greet, hello).');
+  assert.strictEqual(r.output, 'hello');
+});
+
+test('call/3 applies two extra arguments', () => {
+  const prog = 'add(X, Y, Z) :- Z is X + Y.';
+  assertBinding(q(prog, 'call(add, 3, 4, Z).'), 'Z', '7');
+});
+
+// ---------------------------------------------------------------------------
+// 19. Atom operations
+// ---------------------------------------------------------------------------
+group('Atom operations');
+
+test('atom_concat/3 forward', () => {
+  assertBinding(q('', 'atom_concat(hello, world, X).'), 'X', 'helloworld');
+});
+
+test('atom_concat/3 with integer argument', () => {
+  assertBinding(q('', 'atom_concat(item, 42, X).'), 'X', 'item42');
+});
+
+test('atom_length/2', () => {
+  assertBinding(q('', 'atom_length(hello, N).'), 'N', '5');
+  assertBinding(q('', "atom_length('', N)."), 'N', '0');
+});
+
+test('atom_chars/2 forward', () => {
+  assertBinding(q('', 'atom_chars(abc, Cs).'), 'Cs', '[a,b,c]');
+});
+
+test('atom_chars/2 reverse', () => {
+  assertBinding(q('', 'atom_chars(X, [h,i]).'), 'X', 'hi');
+});
+
+test('atom_codes/2', () => {
+  assertBinding(q('', 'atom_codes(hi, Cs).'), 'Cs', '[104,105]');
+});
+
+test('char_code/2', () => {
+  assertBinding(q('', 'char_code(a, X).'), 'X', '97');
+});
+
+test('number_codes/2', () => {
+  assertBinding(q('', 'number_codes(42, Cs).'), 'Cs', '[52,50]');
+});
+
+test('number_chars/2', () => {
+  // Characters are rendered as atoms without quotes (e.g. 4 not '4').
+  assertBinding(q('', 'number_chars(42, Cs).'), 'Cs', '[4,2]');
+});
+
+test('atom_number/2', () => {
+  assertBinding(q('', "atom_number('42', N)."), 'N', '42');
+});
+
+test('upcase_atom/2', () => {
+  assertBinding(q('', 'upcase_atom(hello, X).'), 'X', 'HELLO');
+});
+
+test('downcase_atom/2', () => {
+  assertBinding(q('', "downcase_atom('HELLO', X)."), 'X', 'hello');
+});
+
+test('term_to_atom/2', () => {
+  assertBinding(q('', 'term_to_atom(f(1,2), X).'), 'X', 'f(1,2)');
+});
+
+// ---------------------------------------------------------------------------
+// 20. functor/3, arg/3, =..
+// ---------------------------------------------------------------------------
+group('functor/3, arg/3, =..');
+
+test('functor/3 decomposes compound', () => {
+  const r = q('', 'functor(f(a,b,c), F, A).');
+  assertBinding(r, 'F', 'f');
+  assertBinding(r, 'A', '3');
+});
+
+test('functor/3 for atom returns arity 0', () => {
+  const r = q('', 'functor(hello, F, A).');
+  assertBinding(r, 'F', 'hello');
+  assertBinding(r, 'A', '0');
+});
+
+test('functor/3 for integer', () => {
+  const r = q('', 'functor(42, F, A).');
+  assertBinding(r, 'F', '42');
+  assertBinding(r, 'A', '0');
+});
+
+test('arg/3 extracts each argument', () => {
+  assertBinding(q('', 'arg(1, f(a,b,c), X).'), 'X', 'a');
+  assertBinding(q('', 'arg(2, f(a,b,c), X).'), 'X', 'b');
+  assertBinding(q('', 'arg(3, f(a,b,c), X).'), 'X', 'c');
+});
+
+test('=.. univ decomposes compound', () => {
+  assertBinding(q('', 'f(a,b) =.. L.'), 'L', '[f,a,b]');
+});
+
+test('=.. univ builds compound from list', () => {
+  assertBinding(q('', 'T =.. [g, 1, 2].'), 'T', 'g(1,2)');
+});
+
+test('=.. for atom gives singleton list', () => {
+  assertBinding(q('', 'hello =.. L.'), 'L', '[hello]');
+});
+
+// ---------------------------------------------------------------------------
+// 21. copy_term/2
+// ---------------------------------------------------------------------------
+group('copy_term/2');
+
+test('copy_term creates independent copy (compound shape preserved)', () => {
+  const r = q('', 'copy_term(f(X, X), Copy).');
+  assert.ok(r.ok);
+  assert.ok(r.answers[0]['Copy'].startsWith('f('));
+});
+
+test('copy_term with ground term is identity', () => {
+  assertBinding(q('', 'copy_term(f(1,2), Copy).'), 'Copy', 'f(1,2)');
+});
+
+// ---------------------------------------------------------------------------
+// 22. succ/2, plus/3, between/3
+// ---------------------------------------------------------------------------
+group('succ/2, plus/3, between/3');
+
+test('succ/2 forward', () => {
+  assertBinding(q('', 'succ(4, X).'), 'X', '5');
+});
+
+test('succ/2 reverse', () => {
+  assertBinding(q('', 'succ(X, 5).'), 'X', '4');
+});
+
+test('plus/3 forward', () => {
+  assertBinding(q('', 'plus(3, 4, X).'), 'X', '7');
+});
+
+test('plus/3 reverse first arg', () => {
+  assertBinding(q('', 'plus(X, 4, 7).'), 'X', '3');
+});
+
+test('plus/3 reverse second arg', () => {
+  assertBinding(q('', 'plus(3, X, 7).'), 'X', '4');
+});
+
+test('between/3 generates values', () => {
+  const r = q('', 'between(1, 3, X).', 10);
+  const vals = r.answers.map(a => a['X']);
+  assert.deepStrictEqual(vals, ['1', '2', '3']);
+});
+
+test('between/3 check mode succeeds when in range', () => {
+  assert.ok(q('', 'between(1, 5, 3).').ok);
+});
+
+test('between/3 check mode fails when out of range', () => {
+  assert.ok(fails('', 'between(1, 5, 7).'));
+});
+
+// ---------------------------------------------------------------------------
+// 23. compare/3 and standard order comparisons
+// ---------------------------------------------------------------------------
+group('compare/3 and standard order (@<, @>, @=<, @>=)');
+
+test('compare/3 — less than', () => {
+  assertBinding(q('', 'compare(Order, a, b).'), 'Order', '<');
+});
+
+test('compare/3 — greater than', () => {
+  assertBinding(q('', 'compare(Order, b, a).'), 'Order', '>');
+});
+
+test('compare/3 — equal', () => {
+  assertBinding(q('', 'compare(Order, foo, foo).'), 'Order', '=');
+});
+
+test('@< standard order: a @< b succeeds', () => {
+  assert.ok(q('', 'a @< b.').ok);
+});
+
+test('@< standard order: b @< a fails', () => {
+  assert.ok(fails('', 'b @< a.'));
+});
+
+test('@> standard order: b @> a succeeds', () => {
+  assert.ok(q('', 'b @> a.').ok);
+});
+
+test('@=< standard order: a @=< a and a @=< b succeed', () => {
+  assert.ok(q('', 'a @=< a.').ok);
+  assert.ok(q('', 'a @=< b.').ok);
+});
+
+test('@>= standard order: b @>= a and a @>= a succeed', () => {
+  assert.ok(q('', 'b @>= a.').ok);
+  assert.ok(q('', 'a @>= a.').ok);
+});
+
+// ---------------------------------------------------------------------------
+// 24. maplist/2, maplist/3, include/3, exclude/3
+// ---------------------------------------------------------------------------
+group('maplist/2, maplist/3, include/3, exclude/3');
+
+test('maplist/2 succeeds when all elements satisfy goal', () => {
+  const prog = 'positive(X) :- X > 0.';
+  assert.ok(q(prog, 'maplist(positive, [1,2,3]).').ok);
+});
+
+test('maplist/2 fails when an element does not satisfy goal', () => {
+  const prog = 'positive(X) :- X > 0.';
+  assert.ok(fails(prog, 'maplist(positive, [1,-1,3]).'));
+});
+
+test('maplist/3 transforms list', () => {
+  const prog = 'double(X, Y) :- Y is X * 2.';
+  assertBinding(q(prog, 'maplist(double, [1,2,3], Ys).'), 'Ys', '[2,4,6]');
+});
+
+test('include/3 keeps matching elements', () => {
+  const prog = 'even(X) :- 0 =:= X mod 2.';
+  assertBinding(q(prog, 'include(even, [1,2,3,4,5,6], Evens).'), 'Evens', '[2,4,6]');
+});
+
+test('exclude/3 removes matching elements', () => {
+  const prog = 'even(X) :- 0 =:= X mod 2.';
+  assertBinding(q(prog, 'exclude(even, [1,2,3,4,5,6], Odds).'), 'Odds', '[1,3,5]');
+});
+
+// ---------------------------------------------------------------------------
+// 25. select/3 and permutation/2
+// ---------------------------------------------------------------------------
+group('select/3 and permutation/2');
+
+test('select/3 picks an element and returns rest', () => {
+  assertBinding(q('', 'select(2, [1,2,3], Rest).', 1), 'Rest', '[1,3]');
+});
+
+test('permutation/2 generates all permutations', () => {
+  const r = q('', 'permutation([1,2,3], P).', 10);
+  assert.strictEqual(r.answers.length, 6);
+});
+
+// ---------------------------------------------------------------------------
+// 26. Error handling
+// ---------------------------------------------------------------------------
+group('Error handling');
+
+test('parse error in program is tolerated (runQuery returns result)', () => {
+  const r = q('foo(X :-', 'true.');
+  assert.strictEqual(typeof r.ok, 'boolean');
+});
+
+test('parse error in query returns non-null error field', () => {
+  const r = q('', 'foo(X :-');
+  assert.ok(r.error !== null);
+});
+
+test('empty query returns error or not-ok', () => {
+  const r = q('', '');
+  assert.ok(r.error !== null || !r.ok);
+});
+
+test('unknown predicate fails gracefully with no JS error', () => {
+  const r = q('', 'completely_unknown_predicate_xyz(x).');
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.answers.length, 0);
+});
+
+test('deep recursion returns a JS error message', () => {
+  const prog = 'loop :- loop.';
+  const r = q(prog, 'loop.');
+  assert.ok(r.error !== null);
+});
+
+// ---------------------------------------------------------------------------
+// 27. hasMainPredicate
+// ---------------------------------------------------------------------------
+group('hasMainPredicate');
+
+test('detects fact main.', () => {
+  assert.ok(pl2js.hasMainPredicate('main.'));
+});
+
+test('detects rule main :- ...', () => {
+  assert.ok(pl2js.hasMainPredicate('main :- write(hello), nl.'));
+});
+
+test('returns false for program with no main', () => {
+  assert.ok(!pl2js.hasMainPredicate('foo :- bar.'));
+});
+
+test('does not false-positive on mainLoop', () => {
+  assert.ok(!pl2js.hasMainPredicate('mainLoop :- true.'));
+});
+
+test('detects main inside a larger program', () => {
+  const prog = 'foo(x).\nbar :- foo(x).\nmain :- bar.\n';
+  assert.ok(pl2js.hasMainPredicate(prog));
+});
+
+// ---------------------------------------------------------------------------
+// 28. tokenize
+// ---------------------------------------------------------------------------
+group('tokenize');
+
+test('tokenizes atoms and operators', () => {
+  const toks = pl2js.tokenize('foo(X) :- bar(X).');
+  assert.ok(Array.isArray(toks));
+  assert.ok(toks.length > 0);
+  assert.strictEqual(toks[0].t, 'atom');
+  assert.strictEqual(toks[0].v, 'foo');
+});
+
+test('tokenizes integers', () => {
+  const toks = pl2js.tokenize('42.');
+  assert.ok(toks.some(t => t.t === 'int' && t.v === 42));
+});
+
+test('tokenizes single-quoted atoms (including spaces)', () => {
+  const toks = pl2js.tokenize("'hello world'.");
+  assert.ok(toks.some(t => t.t === 'atom' && t.v === 'hello world'));
+});
+
+test('tokenizes variables', () => {
+  const toks = pl2js.tokenize('X :- Y.');
+  assert.ok(toks.some(t => t.t === 'var' && t.v === 'X'));
+  assert.ok(toks.some(t => t.t === 'var' && t.v === 'Y'));
+});
+
+test('strips line comments', () => {
+  const toks = pl2js.tokenize('% this is a comment\nfoo.');
+  assert.ok(toks.every(t => t.v !== '%'));
+  assert.ok(toks.some(t => t.t === 'atom' && t.v === 'foo'));
+});
+
+test('strips block comments', () => {
+  const toks = pl2js.tokenize('/* block comment */ foo.');
+  assert.ok(toks.some(t => t.t === 'atom' && t.v === 'foo'));
+});
+
+test('tokenizes multi-char operators', () => {
+  const toks = pl2js.tokenize('X =:= Y.');
+  assert.ok(toks.some(t => t.t === 'op' && t.v === '=:='));
+});
+
+test('tokenizes character-code notation 0\'a', () => {
+  const toks = pl2js.tokenize("0'a.");
+  assert.ok(toks.some(t => t.t === 'int' && t.v === 97));
+});
+
+// ---------------------------------------------------------------------------
+// 29. parsePrologSource
+// ---------------------------------------------------------------------------
+group('parsePrologSource');
+
+test('parses facts into clauses', () => {
+  const clauses = pl2js.parsePrologSource('foo(1). foo(2). foo(3).');
+  assert.strictEqual(clauses.length, 3);
+  assert.ok(clauses.every(c => c.head && c.head.functor === 'foo'));
+});
+
+test('parses rules with body', () => {
+  const clauses = pl2js.parsePrologSource('bar(X) :- foo(X).');
+  assert.strictEqual(clauses.length, 1);
+  assert.ok(clauses[0].body !== null);
+});
+
+test('ignores directives (:- use_module etc.)', () => {
+  // Directives return null from parseClause and are filtered out.
+  const clauses = pl2js.parsePrologSource(':- use_module(lists).\nfoo(a).');
+  assert.strictEqual(clauses.length, 1);
+  assert.strictEqual(clauses[0].head.functor, 'foo');
+});
+
+test('parses list facts', () => {
+  const clauses = pl2js.parsePrologSource('items([a,b,c]).');
+  assert.strictEqual(clauses.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// 30. buildDatabase
+// ---------------------------------------------------------------------------
+group('buildDatabase');
+
+test('groups clauses by predicate key', () => {
+  const clauses = pl2js.parsePrologSource('p(1). p(2). q(a).');
+  const db = pl2js.buildDatabase(clauses);
+  assert.ok('p/1' in db);
+  assert.ok('q/1' in db);
+  assert.strictEqual(db['p/1'].length, 2);
+  assert.strictEqual(db['q/1'].length, 1);
+});
+
+test('handles 0-arity predicates', () => {
+  const clauses = pl2js.parsePrologSource('go.');
+  const db = pl2js.buildDatabase(clauses);
+  assert.ok('go/0' in db);
+});
+
+// ---------------------------------------------------------------------------
+// 31. termToString (via query bindings)
+// ---------------------------------------------------------------------------
+group('termToString (via query answer bindings)');
+
+test('renders atom', () => {
+  assert.strictEqual(q('', 'X = hello.').answers[0]['X'], 'hello');
+});
+
+test('renders integer', () => {
+  assert.strictEqual(q('', 'X = 42.').answers[0]['X'], '42');
+});
+
+test('renders list', () => {
+  assert.strictEqual(q('', 'X = [1,2,3].').answers[0]['X'], '[1,2,3]');
+});
+
+test('renders compound', () => {
+  assert.strictEqual(q('', 'X = f(a,b).').answers[0]['X'], 'f(a,b)');
+});
+
+test('renders nested compound', () => {
+  assert.strictEqual(q('', 'X = f(g(1), h(2,3)).').answers[0]['X'], 'f(g(1),h(2,3))');
+});
+
+test('renders empty list', () => {
+  assert.strictEqual(q('', 'X = [].').answers[0]['X'], '[]');
+});
+
+test('termToString exported function renders atom', () => {
+  const toks = pl2js.tokenize('hello.');
+  const clauses = pl2js.parsePrologSource('hello.');
+  // The exported termToString renders a parsed atom term.
+  const atomTerm = clauses[0].head; // {type:'atom', name:'hello'}
+  assert.strictEqual(pl2js.termToString(atomTerm), 'hello');
+});
+
+// ---------------------------------------------------------------------------
+// 32. generateHtml
+// ---------------------------------------------------------------------------
+group('generateHtml');
+
+const RUNTIME_SRC = fs.readFileSync(path.join(__dirname, 'pl2js.js'), 'utf8');
+
+test('generates a string starting with <!DOCTYPE html>', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello), nl.');
+  assert.ok(typeof html === 'string');
+  assert.ok(html.startsWith('<!DOCTYPE html>'));
+});
+
+test('generated HTML contains <html> and </html>', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello), nl.');
+  assert.ok(html.includes('<html'));
+  assert.ok(html.includes('</html>'));
+});
+
+test('generated HTML embeds the program source', () => {
+  const prog = 'main :- write(hello), nl.';
+  const html = pl2js.generateHtml(RUNTIME_SRC, prog);
+  assert.ok(html.includes(prog));
+});
+
+test('generated HTML includes reminder banner when no main/0 defined', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'foo(x).');
+  assert.ok(html.includes('main/0'));
+});
+
+test('generated HTML does not include reminder banner in body when main/0 is defined', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  // The notice text exists once inside the embedded runtime source code.
+  // When main/0 IS defined, the notice div is NOT added to the HTML body,
+  // so id="notice" appears exactly once (inside the <script> block).
+  // Without main/0 it would appear twice (script + body div).
+  const count = (html.match(/id="notice"/g) || []).length;
+  assert.strictEqual(count, 1,
+    'notice div should only appear in the embedded runtime source, not in the HTML body');
+});
+
+test('</script> inside runtime is escaped so HTML parser is not confused', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  // Should be exactly 2 literal </script> tags: one closing the runtime
+  // <script> block and one closing the init <script> block.
+  const count = (html.match(/<\/script>/gi) || []).length;
+  assert.strictEqual(count, 2);
+});
+
+// ---------------------------------------------------------------------------
+// 33. Integration — full example programs
+// ---------------------------------------------------------------------------
+group('Integration — full programs');
+
+test('family.pl: grandparent(tom, ann) succeeds', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'family.pl'), 'utf8');
+  assert.ok(q(prog, 'grandparent(tom, ann).').ok);
+});
+
+test('family.pl: grandparent returns correct variable bindings', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'family.pl'), 'utf8');
+  const r = q(prog, 'grandparent(tom, Z).', 10);
+  const grandchildren = r.answers.map(a => a['Z']);
+  assert.ok(grandchildren.includes('ann'));
+  assert.ok(grandchildren.includes('pat'));
+});
+
+test('rules.pl: mortal(socrates) succeeds', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'rules.pl'), 'utf8');
+  assert.ok(q(prog, 'mortal(socrates).').ok);
+});
+
+test('rules.pl: mortal(zeus) fails', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'rules.pl'), 'utf8');
+  assert.ok(fails(prog, 'mortal(zeus).'));
+});
+
+test('rules.pl: can_fly(tweety) succeeds with negation', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'rules.pl'), 'utf8');
+  assert.ok(q(prog, 'can_fly(tweety).').ok);
+});
+
+test('rules.pl: can_fly(sam) fails (sam is a penguin)', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'rules.pl'), 'utf8');
+  assert.ok(fails(prog, 'can_fly(sam).'));
+});
+
+test('lists.pl: append gives correct result', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'lists.pl'), 'utf8');
+  assertBinding(q(prog, 'append([1,2],[3,4],L).'), 'L', '[1,2,3,4]');
+});
+
+test('lists.pl: my_reverse gives correct result', () => {
+  const prog = fs.readFileSync(path.join(__dirname, 'examples', 'lists.pl'), 'utf8');
+  assertBinding(q(prog, 'my_reverse([1,2,3],R).'), 'R', '[3,2,1]');
+});
+
+test('write/nl output is captured correctly', () => {
+  const prog = "demo :- write(hello), write(' '), write(world), nl.";
+  const r = q(prog, 'demo.');
+  assert.strictEqual(r.output, 'hello world\n');
+});
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+console.log('\n' + '─'.repeat(50));
+console.log('Results: ' + _passed + ' passed, ' + _failed + ' failed');
+if (_failed > 0) {
+  console.log('SOME TESTS FAILED');
+  process.exit(1);
+} else {
+  console.log('ALL TESTS PASSED');
+}
