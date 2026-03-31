@@ -11,6 +11,8 @@
 
 * NEW: Run code directly in browser without installation with [pl2js](https://luciangreen.github.io/pl2js/).
 
+* Programming tip: You can find library predicates such as my_reverse in the examples folder. When using my_reverse, make sure the append predicate is also defined, as it is required for correct execution.
+
 ---
 
 ## Quick start — browser editor (no installation needed)
