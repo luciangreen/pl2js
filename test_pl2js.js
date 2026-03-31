@@ -870,7 +870,7 @@ test('number_codes/2', () => {
 });
 
 test('number_chars/2', () => {
-  // Characters are rendered as atoms without quotes (e.g. 4 not \'4\').
+  // Characters are rendered as atoms without quotes (e.g. 4 not '4').
   assertBinding(q('', 'number_chars(42, Cs).'), 'Cs', '[4,2]');
 });
 
