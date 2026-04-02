@@ -1641,6 +1641,63 @@
           });
         }
         maplist2Solve(0, env);
+      } else if (a === 4) {
+        const raw1 = listToArray(deref(env, goal.args[1]), env);
+        const raw2 = listToArray(deref(env, goal.args[2]), env);
+        const raw3 = listToArray(deref(env, goal.args[3]), env);
+        const len4 = raw1 ? raw1.length : (raw2 ? raw2.length : (raw3 ? raw3.length : -1));
+        if (len4 < 0) return;
+        if ((raw1 && raw1.length !== len4) || (raw2 && raw2.length !== len4) || (raw3 && raw3.length !== len4)) return;
+        const vars1_4 = raw1 ? null : Array.from({length: len4}, () => mkVar('_M'));
+        const vars2_4 = raw2 ? null : Array.from({length: len4}, () => mkVar('_M'));
+        const vars3_4 = raw3 ? null : Array.from({length: len4}, () => mkVar('_M'));
+        function maplist3Solve(idx, envCur) {
+          if (idx === len4) {
+            const e2 = copyEnv(envCur);
+            if ((!vars1_4 || unify(e2, goal.args[1], arrayToList(vars1_4.map(v => applyEnv(envCur, v))))) &&
+                (!vars2_4 || unify(e2, goal.args[2], arrayToList(vars2_4.map(v => applyEnv(envCur, v))))) &&
+                (!vars3_4 || unify(e2, goal.args[3], arrayToList(vars3_4.map(v => applyEnv(envCur, v)))))) k(e2);
+            return;
+          }
+          const el1 = raw1 ? raw1[idx] : vars1_4[idx];
+          const el2 = raw2 ? raw2[idx] : vars2_4[idx];
+          const el3 = raw3 ? raw3[idx] : vars3_4[idx];
+          solve(mkCompound('call', [goal.args[0], el1, el2, el3]), envCur, db, depth + 1, function(e2) {
+            maplist3Solve(idx + 1, e2);
+          });
+        }
+        maplist3Solve(0, env);
+      } else if (a === 5) {
+        const raw1_5 = listToArray(deref(env, goal.args[1]), env);
+        const raw2_5 = listToArray(deref(env, goal.args[2]), env);
+        const raw3_5 = listToArray(deref(env, goal.args[3]), env);
+        const raw4_5 = listToArray(deref(env, goal.args[4]), env);
+        const len5 = raw1_5 ? raw1_5.length : (raw2_5 ? raw2_5.length : (raw3_5 ? raw3_5.length : (raw4_5 ? raw4_5.length : -1)));
+        if (len5 < 0) return;
+        if ((raw1_5 && raw1_5.length !== len5) || (raw2_5 && raw2_5.length !== len5) ||
+            (raw3_5 && raw3_5.length !== len5) || (raw4_5 && raw4_5.length !== len5)) return;
+        const vars1_5 = raw1_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
+        const vars2_5 = raw2_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
+        const vars3_5 = raw3_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
+        const vars4_5 = raw4_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
+        function maplist4Solve(idx, envCur) {
+          if (idx === len5) {
+            const e2 = copyEnv(envCur);
+            if ((!vars1_5 || unify(e2, goal.args[1], arrayToList(vars1_5.map(v => applyEnv(envCur, v))))) &&
+                (!vars2_5 || unify(e2, goal.args[2], arrayToList(vars2_5.map(v => applyEnv(envCur, v))))) &&
+                (!vars3_5 || unify(e2, goal.args[3], arrayToList(vars3_5.map(v => applyEnv(envCur, v))))) &&
+                (!vars4_5 || unify(e2, goal.args[4], arrayToList(vars4_5.map(v => applyEnv(envCur, v)))))) k(e2);
+            return;
+          }
+          const el1 = raw1_5 ? raw1_5[idx] : vars1_5[idx];
+          const el2 = raw2_5 ? raw2_5[idx] : vars2_5[idx];
+          const el3 = raw3_5 ? raw3_5[idx] : vars3_5[idx];
+          const el4 = raw4_5 ? raw4_5[idx] : vars4_5[idx];
+          solve(mkCompound('call', [goal.args[0], el1, el2, el3, el4]), envCur, db, depth + 1, function(e2) {
+            maplist4Solve(idx + 1, e2);
+          });
+        }
+        maplist4Solve(0, env);
       }
       return;
     }
@@ -1683,6 +1740,100 @@
         excludeSolve(idx + 1, envCur);
       }
       excludeSolve(0, env);
+      return;
+    }
+    if (f === 'convlist' && a === 3) {
+      const lst = listToArray(deref(env, goal.args[1]), env);
+      if (!lst) return;
+      const acc = [];
+      function convlistSolve(idx, envCur) {
+        if (idx === lst.length) {
+          const e2 = copyEnv(envCur);
+          if (unify(e2, goal.args[2], arrayToList(acc))) k(e2);
+          return;
+        }
+        const outVar = mkVar('_C');
+        let found = false;
+        try {
+          solve(mkCompound('call', [goal.args[0], lst[idx], outVar]), envCur, db, depth + 1, function(e2) {
+            if (!found) { found = true; acc.push(applyEnv(e2, outVar)); convlistSolve(idx + 1, e2); }
+          });
+        } catch(e) { if (!e.cut) throw e; }
+        if (!found) convlistSolve(idx + 1, envCur);
+      }
+      convlistSolve(0, env);
+      return;
+    }
+    if (f === 'foldl' && a >= 4) {
+      // foldl(Goal, List, V0, V) or foldl(Goal, L1, L2, V0, V) etc.
+      if (a === 4) {
+        const lst = listToArray(deref(env, goal.args[1]), env);
+        if (!lst) return;
+        function foldlSolve(idx, envCur, vi) {
+          if (idx === lst.length) {
+            const e2 = copyEnv(envCur);
+            if (unify(e2, goal.args[3], vi)) k(e2);
+            return;
+          }
+          const nextVar = mkVar('_F');
+          solve(mkCompound('call', [goal.args[0], lst[idx], vi, nextVar]), envCur, db, depth + 1, function(e2) {
+            foldlSolve(idx + 1, e2, applyEnv(e2, nextVar));
+          });
+        }
+        foldlSolve(0, env, applyEnv(env, goal.args[2]));
+      } else if (a === 5) {
+        const lst1 = listToArray(deref(env, goal.args[1]), env);
+        const lst2 = listToArray(deref(env, goal.args[2]), env);
+        if (!lst1 || !lst2 || lst1.length !== lst2.length) return;
+        function foldl2Solve(idx, envCur, vi) {
+          if (idx === lst1.length) {
+            const e2 = copyEnv(envCur);
+            if (unify(e2, goal.args[4], vi)) k(e2);
+            return;
+          }
+          const nextVar = mkVar('_F');
+          solve(mkCompound('call', [goal.args[0], lst1[idx], lst2[idx], vi, nextVar]), envCur, db, depth + 1, function(e2) {
+            foldl2Solve(idx + 1, e2, applyEnv(e2, nextVar));
+          });
+        }
+        foldl2Solve(0, env, applyEnv(env, goal.args[3]));
+      } else if (a === 6) {
+        const lst1 = listToArray(deref(env, goal.args[1]), env);
+        const lst2 = listToArray(deref(env, goal.args[2]), env);
+        const lst3 = listToArray(deref(env, goal.args[3]), env);
+        if (!lst1 || !lst2 || !lst3 || lst1.length !== lst2.length || lst1.length !== lst3.length) return;
+        function foldl3Solve(idx, envCur, vi) {
+          if (idx === lst1.length) {
+            const e2 = copyEnv(envCur);
+            if (unify(e2, goal.args[5], vi)) k(e2);
+            return;
+          }
+          const nextVar = mkVar('_F');
+          solve(mkCompound('call', [goal.args[0], lst1[idx], lst2[idx], lst3[idx], vi, nextVar]), envCur, db, depth + 1, function(e2) {
+            foldl3Solve(idx + 1, e2, applyEnv(e2, nextVar));
+          });
+        }
+        foldl3Solve(0, env, applyEnv(env, goal.args[4]));
+      } else if (a === 7) {
+        const lst1 = listToArray(deref(env, goal.args[1]), env);
+        const lst2 = listToArray(deref(env, goal.args[2]), env);
+        const lst3 = listToArray(deref(env, goal.args[3]), env);
+        const lst4 = listToArray(deref(env, goal.args[4]), env);
+        if (!lst1 || !lst2 || !lst3 || !lst4 ||
+            lst1.length !== lst2.length || lst1.length !== lst3.length || lst1.length !== lst4.length) return;
+        function foldl4Solve(idx, envCur, vi) {
+          if (idx === lst1.length) {
+            const e2 = copyEnv(envCur);
+            if (unify(e2, goal.args[6], vi)) k(e2);
+            return;
+          }
+          const nextVar = mkVar('_F');
+          solve(mkCompound('call', [goal.args[0], lst1[idx], lst2[idx], lst3[idx], lst4[idx], vi, nextVar]), envCur, db, depth + 1, function(e2) {
+            foldl4Solve(idx + 1, e2, applyEnv(e2, nextVar));
+          });
+        }
+        foldl4Solve(0, env, applyEnv(env, goal.args[5]));
+      }
       return;
     }
 
