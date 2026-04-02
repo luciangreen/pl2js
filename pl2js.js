@@ -1645,14 +1645,14 @@
         const raw1 = listToArray(deref(env, goal.args[1]), env);
         const raw2 = listToArray(deref(env, goal.args[2]), env);
         const raw3 = listToArray(deref(env, goal.args[3]), env);
-        const len4 = raw1 ? raw1.length : (raw2 ? raw2.length : (raw3 ? raw3.length : -1));
-        if (len4 < 0) return;
-        if ((raw1 && raw1.length !== len4) || (raw2 && raw2.length !== len4) || (raw3 && raw3.length !== len4)) return;
-        const vars1_4 = raw1 ? null : Array.from({length: len4}, () => mkVar('_M'));
-        const vars2_4 = raw2 ? null : Array.from({length: len4}, () => mkVar('_M'));
-        const vars3_4 = raw3 ? null : Array.from({length: len4}, () => mkVar('_M'));
+        const mLen = raw1 ? raw1.length : (raw2 ? raw2.length : (raw3 ? raw3.length : -1));
+        if (mLen < 0) return;
+        if ((raw1 && raw1.length !== mLen) || (raw2 && raw2.length !== mLen) || (raw3 && raw3.length !== mLen)) return;
+        const vars1_4 = raw1 ? null : Array.from({length: mLen}, () => mkVar('_M'));
+        const vars2_4 = raw2 ? null : Array.from({length: mLen}, () => mkVar('_M'));
+        const vars3_4 = raw3 ? null : Array.from({length: mLen}, () => mkVar('_M'));
         function maplist3Solve(idx, envCur) {
-          if (idx === len4) {
+          if (idx === mLen) {
             const e2 = copyEnv(envCur);
             if ((!vars1_4 || unify(e2, goal.args[1], arrayToList(vars1_4.map(v => applyEnv(envCur, v))))) &&
                 (!vars2_4 || unify(e2, goal.args[2], arrayToList(vars2_4.map(v => applyEnv(envCur, v))))) &&
@@ -1672,16 +1672,16 @@
         const raw2_5 = listToArray(deref(env, goal.args[2]), env);
         const raw3_5 = listToArray(deref(env, goal.args[3]), env);
         const raw4_5 = listToArray(deref(env, goal.args[4]), env);
-        const len5 = raw1_5 ? raw1_5.length : (raw2_5 ? raw2_5.length : (raw3_5 ? raw3_5.length : (raw4_5 ? raw4_5.length : -1)));
-        if (len5 < 0) return;
-        if ((raw1_5 && raw1_5.length !== len5) || (raw2_5 && raw2_5.length !== len5) ||
-            (raw3_5 && raw3_5.length !== len5) || (raw4_5 && raw4_5.length !== len5)) return;
-        const vars1_5 = raw1_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
-        const vars2_5 = raw2_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
-        const vars3_5 = raw3_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
-        const vars4_5 = raw4_5 ? null : Array.from({length: len5}, () => mkVar('_M'));
+        const mLen5 = raw1_5 ? raw1_5.length : (raw2_5 ? raw2_5.length : (raw3_5 ? raw3_5.length : (raw4_5 ? raw4_5.length : -1)));
+        if (mLen5 < 0) return;
+        if ((raw1_5 && raw1_5.length !== mLen5) || (raw2_5 && raw2_5.length !== mLen5) ||
+            (raw3_5 && raw3_5.length !== mLen5) || (raw4_5 && raw4_5.length !== mLen5)) return;
+        const vars1_5 = raw1_5 ? null : Array.from({length: mLen5}, () => mkVar('_M'));
+        const vars2_5 = raw2_5 ? null : Array.from({length: mLen5}, () => mkVar('_M'));
+        const vars3_5 = raw3_5 ? null : Array.from({length: mLen5}, () => mkVar('_M'));
+        const vars4_5 = raw4_5 ? null : Array.from({length: mLen5}, () => mkVar('_M'));
         function maplist4Solve(idx, envCur) {
-          if (idx === len5) {
+          if (idx === mLen5) {
             const e2 = copyEnv(envCur);
             if ((!vars1_5 || unify(e2, goal.args[1], arrayToList(vars1_5.map(v => applyEnv(envCur, v))))) &&
                 (!vars2_5 || unify(e2, goal.args[2], arrayToList(vars2_5.map(v => applyEnv(envCur, v))))) &&
@@ -1756,7 +1756,11 @@
         let found = false;
         try {
           solve(mkCompound('call', [goal.args[0], lst[idx], outVar]), envCur, db, depth + 1, function(e2) {
-            if (!found) { found = true; acc.push(applyEnv(e2, outVar)); convlistSolve(idx + 1, e2); }
+            if (!found) {
+              found = true;
+              acc.push(applyEnv(e2, outVar));
+              convlistSolve(idx + 1, e2);
+            }
           });
         } catch(e) { if (!e.cut) throw e; }
         if (!found) convlistSolve(idx + 1, envCur);
