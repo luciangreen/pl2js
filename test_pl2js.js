@@ -1044,6 +1044,86 @@ test('maplist/3 transforms list', () => {
   assertBinding(q(prog, 'maplist(double, [1,2,3], Ys).'), 'Ys', '[2,4,6]');
 });
 
+test('maplist/4 applies goal to three corresponding lists', () => {
+  const prog = 'add(X, Y, Z) :- Z is X + Y.';
+  assertBinding(q(prog, 'maplist(add, [1,2,3], [10,20,30], Zs).'), 'Zs', '[11,22,33]');
+});
+
+test('maplist/4 succeeds on empty lists', () => {
+  const prog = 'add(X, Y, Z) :- Z is X + Y.';
+  assertBinding(q(prog, 'maplist(add, [], [], Zs).'), 'Zs', '[]');
+});
+
+test('maplist/5 applies goal to four corresponding lists', () => {
+  const prog = 'add3(A, B, C, D) :- D is A + B + C.';
+  assertBinding(q(prog, 'maplist(add3, [1,2], [10,20], [100,200], Ds).'), 'Ds', '[111,222]');
+});
+
+test('maplist/4 fails when goal fails for an element', () => {
+  const prog = 'eq(X, X).';
+  assert.ok(fails(prog, 'maplist(eq, [1,2,3], [1,99,3]).'));
+});
+
+test('convlist/3 maps and filters elements', () => {
+  const prog = 'conv(X, Y) :- X > 0, Y is X * 2.';
+  assertBinding(q(prog, 'convlist(conv, [-1,2,-3,4], Ys).'), 'Ys', '[4,8]');
+});
+
+test('convlist/3 on empty list gives empty list', () => {
+  assertBinding(q('', 'convlist(=(x), [], Ys).'), 'Ys', '[]');
+});
+
+test('convlist/3 when all elements pass', () => {
+  const prog = 'wrap(X, w(X)).';
+  assertBinding(q(prog, 'convlist(wrap, [a,b,c], Ys).'), 'Ys', '[w(a),w(b),w(c)]');
+});
+
+// ---------------------------------------------------------------------------
+// 24b. foldl/4, foldl/5, foldl/6, foldl/7
+// ---------------------------------------------------------------------------
+group('foldl/4, foldl/5, foldl/6, foldl/7');
+
+test('foldl/4 sums a list', () => {
+  const prog = 'sum(X, Acc, Res) :- Res is Acc + X.';
+  assertBinding(q(prog, 'foldl(sum, [1,2,3,4], 0, S).'), 'S', '10');
+});
+
+test('foldl/4 on empty list returns V0', () => {
+  const prog = 'sum(X, Acc, Res) :- Res is Acc + X.';
+  assertBinding(q(prog, 'foldl(sum, [], 42, S).'), 'S', '42');
+});
+
+test('foldl/4 builds a reversed list', () => {
+  const prog = 'cons(H, T, [H|T]).';
+  assertBinding(q(prog, 'foldl(cons, [1,2,3], [], R).'), 'R', '[3,2,1]');
+});
+
+test('foldl/5 sums two lists pairwise', () => {
+  const prog = 'pairsum(X, Y, Acc, Res) :- Res is Acc + X + Y.';
+  assertBinding(q(prog, 'foldl(pairsum, [1,2,3], [10,20,30], 0, S).'), 'S', '66');
+});
+
+test('foldl/5 on empty lists returns V0', () => {
+  const prog = 'pairsum(X, Y, Acc, Res) :- Res is Acc + X + Y.';
+  assertBinding(q(prog, 'foldl(pairsum, [], [], 7, S).'), 'S', '7');
+});
+
+test('foldl/5 fails when lists have different lengths', () => {
+  const prog = 'pairsum(X, Y, Acc, Res) :- Res is Acc + X + Y.';
+  assert.ok(fails(prog, 'foldl(pairsum, [1,2], [10], 0, S).'));
+});
+
+test('foldl/6 processes three lists', () => {
+  const prog = 'trisum(X, Y, Z, Acc, Res) :- Res is Acc + X + Y + Z.';
+  assertBinding(q(prog, 'foldl(trisum, [1,2], [10,20], [100,200], 0, S).'), 'S', '333');
+});
+
+test('foldl/7 processes four lists', () => {
+  const prog = 'quadsum(A, B, C, D, Acc, Res) :- Res is Acc + A + B + C + D.';
+  assertBinding(q(prog, 'foldl(quadsum, [1,2], [10,20], [100,200], [1000,2000], 0, S).'), 'S', '3333');
+});
+
+
 test('include/3 keeps matching elements', () => {
   const prog = 'even(X) :- 0 =:= X mod 2.';
   assertBinding(q(prog, 'include(even, [1,2,3,4,5,6], Evens).'), 'Evens', '[2,4,6]');
