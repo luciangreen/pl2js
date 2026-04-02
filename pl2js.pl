@@ -62,6 +62,10 @@ function createCompound(functor, arity, args) {
 function createList(head, tail) { return {type: "list", head: head, tail: tail}; }
 function createNil() { return {type: "nil"}; }
 
+// ---- Predicate registry for meta-calls ----
+const _registry = {};
+function _registerBuiltin(name, arity, fn) { _registry[name + "/" + arity] = fn; }
+
 // ---- State management ----
 function initState() {
     return {
@@ -663,10 +667,20 @@ function msort_2(state, list, sorted) {
 
 // ---- Control ----
 function once_1(state, goal) {
-    // Simplified: just succeeds (full implementation requires meta-call)
-    return true;
+    const savedCp = state.choiceStack.length;
+    const result = _callGoal(state, goal, []);
+    while (state.choiceStack.length > savedCp) state.choiceStack.pop();
+    return result;
 }
 function ignore_1(state, goal) {
+    const savedCp = state.choiceStack.length;
+    const savedSize = state.bindings.length;
+    const result = _callGoal(state, goal, []);
+    if (!result || state.failed) {
+        state.bindings = state.bindings.slice(0, savedSize);
+        state.failed = false;
+    }
+    while (state.choiceStack.length > savedCp) state.choiceStack.pop();
     return true;
 }
 
@@ -682,6 +696,216 @@ function runQuery(predFn, args) {
     const result = predFn(state, ...args);
     return { success: result && !state.failed, output: _prologOutput, state: state };
 }
+
+// ---- Register all built-in predicates ----
+_registerBuiltin("true", 0, true_0);
+_registerBuiltin("fail", 0, fail_0);
+_registerBuiltin("atom", 1, atom_1);
+_registerBuiltin("number", 1, number_1);
+_registerBuiltin("integer", 1, integer_1);
+_registerBuiltin("float", 1, float_1);
+_registerBuiltin("var", 1, var_1);
+_registerBuiltin("nonvar", 1, nonvar_1);
+_registerBuiltin("compound", 1, compound_1);
+_registerBuiltin("atomic", 1, atomic_1);
+_registerBuiltin("callable", 1, callable_1);
+_registerBuiltin("is_list", 1, is_list_1);
+_registerBuiltin("ground", 1, ground_1);
+_registerBuiltin("length", 2, length_2);
+_registerBuiltin("nth0", 3, nth0_3);
+_registerBuiltin("nth1", 3, nth1_3);
+_registerBuiltin("last", 2, last_2);
+_registerBuiltin("reverse", 2, reverse_2);
+_registerBuiltin("atom_length", 2, atom_length_2);
+_registerBuiltin("atom_concat", 3, atom_concat_3);
+_registerBuiltin("atom_chars", 2, atom_chars_2);
+_registerBuiltin("atom_codes", 2, atom_codes_2);
+_registerBuiltin("number_codes", 2, number_codes_2);
+_registerBuiltin("number_chars", 2, number_chars_2);
+_registerBuiltin("char_code", 2, char_code_2);
+_registerBuiltin("functor", 3, functor_3);
+_registerBuiltin("arg", 3, arg_3);
+_registerBuiltin("=..", 2, univ_2);
+_registerBuiltin("copy_term", 2, copy_term_2);
+_registerBuiltin("sort", 2, sort_2);
+_registerBuiltin("msort", 2, msort_2);
+_registerBuiltin("once", 1, once_1);
+_registerBuiltin("ignore", 1, ignore_1);
+_registerBuiltin("is", 2, is_2);
+_registerBuiltin(">", 2, gt_2);
+_registerBuiltin("<", 2, lt_2);
+_registerBuiltin(">=", 2, gte_2);
+_registerBuiltin("=<", 2, lte_2);
+_registerBuiltin("=", 2, eq_2);
+_registerBuiltin("\\=", 2, neq_2);
+_registerBuiltin("==", 2, eqeq_2);
+_registerBuiltin("\\==", 2, neqeq_2);
+_registerBuiltin("@<", 2, term_lt_2);
+_registerBuiltin("@>", 2, term_gt_2);
+_registerBuiltin("@=<", 2, term_lte_2);
+_registerBuiltin("@>=", 2, term_gte_2);
+_registerBuiltin("compare", 3, compare_3);
+_registerBuiltin("write", 1, write_1);
+_registerBuiltin("writeln", 1, writeln_1);
+_registerBuiltin("nl", 0, nl_0);
+_registerBuiltin("tab", 1, tab_1);
+_registerBuiltin("format", 2, format_2);
+
+// ---- Meta-call support ----
+function _callGoal(state, goal, extraArgs) {
+    const g = deref(state, goal);
+    let functor, goalArgs;
+    if (g.type === "atom") { functor = g.name; goalArgs = []; }
+    else if (g.type === "compound") { functor = g.functor; goalArgs = g.args.slice(); }
+    else { state.failed = true; return false; }
+    const allArgs = goalArgs.concat(extraArgs);
+    const key = functor + "/" + allArgs.length;
+    const fn = _registry[key];
+    if (!fn) { state.failed = true; return false; }
+    const result = fn(state, ...allArgs);
+    return result && !state.failed;
+}
+
+// ---- maplist/2-5 ----
+function maplist_2(state, pred, list) {
+    let l = deref(state, list);
+    while (l.type === "list") {
+        if (!_callGoal(state, pred, [deref(state, l.head)])) { state.failed = true; return false; }
+        l = deref(state, l.tail);
+    }
+    if (l.type !== "nil") { state.failed = true; return false; }
+    return true;
+}
+function maplist_3(state, pred, list1, list2) {
+    let l1 = deref(state, list1);
+    const out = [];
+    while (l1.type === "list") {
+        const v = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l1.head), v])) { state.failed = true; return false; }
+        out.push(deref(state, v));
+        l1 = deref(state, l1.tail);
+    }
+    if (l1.type !== "nil") { state.failed = true; return false; }
+    let r = createNil();
+    for (let i = out.length - 1; i >= 0; i--) r = createList(out[i], r);
+    return unify(state, list2, r);
+}
+function maplist_4(state, pred, list1, list2, list3) {
+    let l1 = deref(state, list1);
+    const o2 = [], o3 = [];
+    while (l1.type === "list") {
+        const v2 = createVar(state.nextVarId++);
+        const v3 = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l1.head), v2, v3])) { state.failed = true; return false; }
+        o2.push(deref(state, v2)); o3.push(deref(state, v3));
+        l1 = deref(state, l1.tail);
+    }
+    if (l1.type !== "nil") { state.failed = true; return false; }
+    let r2 = createNil(), r3 = createNil();
+    for (let i = o2.length - 1; i >= 0; i--) { r2 = createList(o2[i], r2); r3 = createList(o3[i], r3); }
+    return unify(state, list2, r2) && unify(state, list3, r3);
+}
+function maplist_5(state, pred, list1, list2, list3, list4) {
+    let l1 = deref(state, list1);
+    const o2 = [], o3 = [], o4 = [];
+    while (l1.type === "list") {
+        const v2 = createVar(state.nextVarId++);
+        const v3 = createVar(state.nextVarId++);
+        const v4 = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l1.head), v2, v3, v4])) { state.failed = true; return false; }
+        o2.push(deref(state, v2)); o3.push(deref(state, v3)); o4.push(deref(state, v4));
+        l1 = deref(state, l1.tail);
+    }
+    if (l1.type !== "nil") { state.failed = true; return false; }
+    let r2 = createNil(), r3 = createNil(), r4 = createNil();
+    for (let i = o2.length - 1; i >= 0; i--) {
+        r2 = createList(o2[i], r2); r3 = createList(o3[i], r3); r4 = createList(o4[i], r4);
+    }
+    return unify(state, list2, r2) && unify(state, list3, r3) && unify(state, list4, r4);
+}
+
+// ---- convlist/3 ----
+function convlist_3(state, pred, list, result) {
+    let l = deref(state, list);
+    const acc = [];
+    while (l.type === "list") {
+        const v = createVar(state.nextVarId++);
+        const savedSize = state.bindings.length;
+        const savedCp = state.choiceStack.length;
+        const ok = _callGoal(state, pred, [deref(state, l.head), v]);
+        if (ok) {
+            acc.push(deref(state, v));
+        } else {
+            state.bindings = state.bindings.slice(0, savedSize);
+            while (state.choiceStack.length > savedCp) state.choiceStack.pop();
+            state.failed = false;
+        }
+        l = deref(state, l.tail);
+    }
+    if (l.type !== "nil") { state.failed = true; return false; }
+    let res = createNil();
+    for (let i = acc.length - 1; i >= 0; i--) res = createList(acc[i], res);
+    return unify(state, result, res);
+}
+
+// ---- foldl/4-7 ----
+function foldl_4(state, pred, list, v0, v) {
+    let l = deref(state, list);
+    let vi = deref(state, v0);
+    while (l.type === "list") {
+        const nv = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l.head), vi, nv])) { state.failed = true; return false; }
+        vi = deref(state, nv);
+        l = deref(state, l.tail);
+    }
+    if (l.type !== "nil") { state.failed = true; return false; }
+    return unify(state, v, vi);
+}
+function foldl_5(state, pred, list1, list2, v0, v) {
+    let l1 = deref(state, list1), l2 = deref(state, list2);
+    let vi = deref(state, v0);
+    while (l1.type === "list" && l2.type === "list") {
+        const nv = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l1.head), deref(state, l2.head), vi, nv])) { state.failed = true; return false; }
+        vi = deref(state, nv);
+        l1 = deref(state, l1.tail); l2 = deref(state, l2.tail);
+    }
+    if (l1.type !== "nil" || l2.type !== "nil") { state.failed = true; return false; }
+    return unify(state, v, vi);
+}
+function foldl_6(state, pred, list1, list2, list3, v0, v) {
+    let l1 = deref(state, list1), l2 = deref(state, list2), l3 = deref(state, list3);
+    let vi = deref(state, v0);
+    while (l1.type === "list" && l2.type === "list" && l3.type === "list") {
+        const nv = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l1.head), deref(state, l2.head), deref(state, l3.head), vi, nv])) { state.failed = true; return false; }
+        vi = deref(state, nv);
+        l1 = deref(state, l1.tail); l2 = deref(state, l2.tail); l3 = deref(state, l3.tail);
+    }
+    if (l1.type !== "nil" || l2.type !== "nil" || l3.type !== "nil") { state.failed = true; return false; }
+    return unify(state, v, vi);
+}
+function foldl_7(state, pred, list1, list2, list3, list4, v0, v) {
+    let l1 = deref(state, list1), l2 = deref(state, list2), l3 = deref(state, list3), l4 = deref(state, list4);
+    let vi = deref(state, v0);
+    while (l1.type === "list" && l2.type === "list" && l3.type === "list" && l4.type === "list") {
+        const nv = createVar(state.nextVarId++);
+        if (!_callGoal(state, pred, [deref(state, l1.head), deref(state, l2.head), deref(state, l3.head), deref(state, l4.head), vi, nv])) { state.failed = true; return false; }
+        vi = deref(state, nv);
+        l1 = deref(state, l1.tail); l2 = deref(state, l2.tail); l3 = deref(state, l3.tail); l4 = deref(state, l4.tail);
+    }
+    if (l1.type !== "nil" || l2.type !== "nil" || l3.type !== "nil" || l4.type !== "nil") { state.failed = true; return false; }
+    return unify(state, v, vi);
+}
+_registerBuiltin("maplist", 2, maplist_2);
+_registerBuiltin("maplist", 3, maplist_3);
+_registerBuiltin("maplist", 4, maplist_4);
+_registerBuiltin("maplist", 5, maplist_5);
+_registerBuiltin("convlist", 3, convlist_3);
+_registerBuiltin("foldl", 4, foldl_4);
+_registerBuiltin("foldl", 5, foldl_5);
+_registerBuiltin("foldl", 6, foldl_6);
+_registerBuiltin("foldl", 7, foldl_7);
 
 // End of runtime library
 '.
@@ -729,7 +953,7 @@ translate_predicate_groups([Group|Rest], JSCode) :-
     atomic_list_concat([GroupCode, RestCode], '\n', JSCode).
 
 %% translate_predicate_group(+Group, -JSCode)
-translate_predicate_group(Name/Arity-Clauses, JSCode) :-
+translate_predicate_group(Name/Arity-Clauses, FinalCode) :-
     Clauses = [FirstClause|_],
     clause_head(FirstClause, Head),
     extract_predicate_info(Head, _, _, Args),
@@ -738,15 +962,17 @@ translate_predicate_group(Name/Arity-Clauses, JSCode) :-
     format(atom(FuncName), '~w_~w', [SanitizedName, Arity]),
     length(Clauses, NumClauses),
     ( NumClauses > 1 ->
-        translate_nondeterministic_predicate(Clauses, FuncName, Params, Arity, JSCode)
+        translate_nondeterministic_predicate(Clauses, FuncName, Params, Arity, FuncCode)
     ;
         translate_predicate_clauses(Clauses, 1, ClausesCode),
-        format(atom(JSCode),
+        format(atom(FuncCode),
 'function ~w(state~w) {
 ~w
     return false; /* No clause matched */
 }', [FuncName, Params, ClausesCode])
-    ).
+    ),
+    format(atom(RegLine), '\n_registry["~w/~w"] = ~w;', [Name, Arity, FuncName]),
+    atom_concat(FuncCode, RegLine, FinalCode).
 
 %% translate_nondeterministic_predicate(+Clauses, +FuncName, +Params, +Arity, -JSCode)
 translate_nondeterministic_predicate(Clauses, FuncName, Params, Arity, JSCode) :-
