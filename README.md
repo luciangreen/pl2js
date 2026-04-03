@@ -187,7 +187,7 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | `bagof/3`, `setof/3` (simplified — no grouping by free vars) | ✅ partial |
 | `once/1`, `ignore/1`, `forall/2` | ✅ |
 | `call/1`, `call/N` | ✅ |
-| `maplist/2`, `maplist/3`, `include/3`, `exclude/3` | ✅ |
+| `maplist/2`, `maplist/3`, `maplist/4`, `maplist/5`, `convlist/3`, `foldl/4`–`foldl/7`, `include/3`, `exclude/3` | ✅ |
 | `succ/2`, `plus/3`, `between/3` | ✅ |
 | `compare/3`, `@</2`, `@>/2`, `@=</2`, `@>=/2` | ✅ |
 | Floats | ❌ (treated as integers) |
@@ -238,7 +238,7 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | Atoms | ✅ |
 | Integers | ✅ |
 | Compound terms | ✅ |
-| Lists (`[H|T]`, `[]`) | ✅ |
+| Lists (`[H\|T]`, `[]`) | ✅ |
 | `is/2` and arithmetic (`+`, `-`, `*`, `/`, `//`, `mod`, `**`, bit ops) | ✅ |
 | Comparison (`>`, `<`, `>=`, `=<`) | ✅ |
 | Standard order comparison (`@<`, `@>`, `@=<`, `@>=`, `compare/3`) | ✅ |
