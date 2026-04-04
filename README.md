@@ -332,7 +332,7 @@ main :-
     ).
 ```
 
-When embedded in a page via `generateHtml/2`, opening it shows a text field labelled
+When embedded in a page via `generateHtml/2`, opening it shows a text field labeled
 "Your name".  Submitting the form reruns `main/0` with `Name` bound to the entered
 text and prints the greeting.
 
