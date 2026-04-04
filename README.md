@@ -151,12 +151,31 @@ node hello.js
 `pl2js.js` exposes a single global object `window.pl2js` (or `module.exports` in Node.js):
 
 ```javascript
-const result = pl2js.runQuery(programSource, queryString, maxAnswers);
-// result: { ok, answers, output, error }
-//   ok:      true if at least one answer was found
-//   answers: array of { varName: stringValue } bindings
-//   output:  text written by write/nl/writeln
-//   error:   string if something went wrong, otherwise null
+const result = pl2js.runQuery(programSource, queryString, maxAnswers, formArgs);
+// programSource : string — Prolog source text
+// queryString   : string — query to run (trailing '.' optional)
+// maxAnswers    : number — maximum solutions to collect (default: 10)
+// formArgs      : object — optional key/value map of form/URL parameters
+//                          (passed to Prolog as named arguments accessible via
+//                          form_argument/2 and read_string/1-2)
+//
+// result: { ok, answers, output, formInputs, error }
+//   ok:         true if at least one answer was found (or query succeeded with no variables)
+//   answers:    array of { varName: stringValue } bindings
+//   output:     text written by write/nl/writeln etc.
+//   formInputs: array of form field descriptors collected by read_string/1-2
+//               and hidden_field/2 — use these to render an interactive form
+//   error:      string if something went wrong, otherwise null
+```
+
+```javascript
+const html = pl2js.generateHtml(runtimeSource, programSource);
+// runtimeSource : string — raw text of pl2js.js (fetched by the caller)
+// programSource : string — Prolog program text to embed
+//
+// Returns a fully self-contained HTML string that embeds the runtime and program,
+// auto-runs main/0 on page load, and supports interactive forms via the
+// form predicates described below.
 ```
 
 ---
@@ -190,6 +209,9 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | `maplist/2`, `maplist/3`, `maplist/4`, `maplist/5`, `convlist/3`, `foldl/4`–`foldl/7`, `include/3`, `exclude/3` | ✅ |
 | `succ/2`, `plus/3`, `between/3` | ✅ |
 | `compare/3`, `@</2`, `@>/2`, `@=</2`, `@>=/2` | ✅ |
+| `read_string/1`, `read_string/2` | ✅ |
+| `form_argument/2` | ✅ |
+| `hidden_field/2` | ✅ |
 | Floats | ❌ (treated as integers) |
 | `assert/retract` (dynamic predicates) | ❌ |
 | Exceptions `throw/1`, `catch/3` | ❌ |
@@ -270,6 +292,49 @@ const result = pl2js.runQuery(programSource, queryString, maxAnswers);
 | File I/O | ❌ |
 
 > **Note on body backtracking:** When a nondeterministic predicate `P` is called as a goal in a rule body, and a *later* goal in the same body fails, the compiler does not automatically retry `P` with its next clause. This mirrors the same limitation in `pl2c`. Predicates that rely on body backtracking should be restructured so the first matching clause succeeds on first try, or use explicit disjunction (`;`) at the predicate level instead.
+
+---
+
+## Form / CGI support
+
+`pl2js.js` lets a Prolog program interact with the user through HTML forms — without
+any server.  The pattern works like classic CGI: the program reads input values, and
+if an input is not yet available the runtime records a form field so the browser can
+render a `<form>` for the user to fill in.
+
+### How it works
+
+1. On first execution `read_string/1-2` binds the value to the empty atom `''` and
+   adds a text-input descriptor to `result.formInputs`.
+2. The page renders the form (or `generateHtml` does this automatically).
+3. When the user submits, the browser appends the field values to the URL as query
+   parameters.
+4. On re-execution `runQuery` receives those parameters via the `formArgs` argument;
+   `read_string` now finds the matching value and unifies it with the variable.
+
+### Form predicates
+
+| Predicate | Description |
+|---|---|
+| `read_string(?Value)` | Bind `Value` to a submitted text-input value.  On first call (no form data yet) binds to `''` and records a text field.  Field names are generated automatically as `rs_0`, `rs_1`, … |
+| `read_string(+Prompt, ?Value)` | Same as `read_string/1` but associates a visible label `Prompt` with the field. |
+| `form_argument(+Name, ?Value)` | Unify `Value` with the URL query parameter named `Name`.  Fails if the parameter is absent. |
+| `hidden_field(+Name, +Value)` | Record a hidden `<input type="hidden">` field in the form, preserving state across submissions. |
+
+### Minimal example
+
+```prolog
+main :-
+    read_string('Your name', Name),
+    (   Name = ''
+    ->  true                          % first run — form will be shown
+    ;   write('Hello, '), write(Name), nl
+    ).
+```
+
+When embedded in a page via `generateHtml/2`, opening it shows a text field labeled
+"Your name".  Submitting the form reruns `main/0` with `Name` bound to the entered
+text and prints the greeting.
 
 ---
 
