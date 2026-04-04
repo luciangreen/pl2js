@@ -706,6 +706,9 @@
 
   const MAX_DEPTH   = 500;  // guard against infinite recursion
   let   _output     = '';   // captured write/nl output
+  let   _formArgs   = {};   // form arguments passed in (URL params / POST data)
+  let   _formInputs = [];   // form inputs collected by read_string / hidden_field
+  let   _readStringCounter = 0;  // sequential counter for read_string field names
 
   function solve(goal, env, db, depth, k) {
     if (depth > MAX_DEPTH) throw new Error('Maximum depth exceeded (possible infinite loop)');
@@ -1591,6 +1594,55 @@
       return;
     }
 
+    // ---- Form / CGI predicates ----
+    // read_string(?Value) or read_string(+Prompt, ?Value)
+    // On first call (no matching form arg): binds Value to '' and records a
+    // text input in _formInputs so the HTML generator can render a form.
+    // On subsequent calls (form arg present): binds Value to the submitted string.
+    if (f === 'read_string' && (a === 1 || a === 2)) {
+      const hasPrompt = (a === 2);
+      const promptTerm = hasPrompt ? deref(env, goal.args[0]) : null;
+      const valueArg   = hasPrompt ? goal.args[1] : goal.args[0];
+      const prompt     = promptTerm
+        ? (promptTerm.type === 'atom' ? promptTerm.name : termToString(env, promptTerm))
+        : '';
+      // Field names follow the pattern 'rs_N' (read_string field index N).
+      const fieldName = 'rs_' + _readStringCounter++;
+      const e2 = copyEnv(env);
+      if (_formArgs[fieldName] !== undefined) {
+        if (unify(e2, valueArg, mkAtom(String(_formArgs[fieldName])))) k(e2);
+      } else {
+        _formInputs.push({ type: 'text', name: fieldName, prompt: prompt });
+        if (unify(e2, valueArg, mkAtom(''))) k(e2);
+      }
+      return;
+    }
+    // form_argument(+Name, ?Value)
+    // Reads a named form argument (URL query param). Fails if not present.
+    if (f === 'form_argument' && a === 2) {
+      const nameTerm = deref(env, goal.args[0]);
+      if (nameTerm.type !== 'atom') return;
+      const argVal = _formArgs[nameTerm.name];
+      if (argVal !== undefined) {
+        const e2 = copyEnv(env);
+        if (unify(e2, goal.args[1], mkAtom(String(argVal)))) k(e2);
+      }
+      return;
+    }
+    // hidden_field(+Name, +Value)
+    // Records a hidden form field that will be included in the generated form.
+    if (f === 'hidden_field' && a === 2) {
+      const nameTerm  = deref(env, goal.args[0]);
+      const valueTerm = deref(env, goal.args[1]);
+      _formInputs.push({
+        type:  'hidden',
+        name:  termToString(env, nameTerm),
+        value: termToString(env, valueTerm)
+      });
+      k(env);
+      return;
+    }
+
     // ---- Misc ----
     if (f === 'nb_getval' && a === 2) { return; } // not supported
     if (f === 'nb_setval' && a === 2) { k(env); return; } // no-op
@@ -2003,9 +2055,12 @@
    *     error:   string|null       // error message if something went wrong
    *   }
    */
-  function runQuery(programSource, queryString, maxAnswers) {
+  function runQuery(programSource, queryString, maxAnswers, formArgs) {
     maxAnswers = maxAnswers || 10;
-    _output = '';
+    _output     = '';
+    _formArgs   = (formArgs && typeof formArgs === 'object') ? formArgs : {};
+    _formInputs = [];
+    _readStringCounter = 0;
 
     let db;
     try {
@@ -2059,10 +2114,11 @@
     }
 
     return {
-      ok:      answers.length > 0 || (errorMsg === null && varNames.length === 0),
-      answers: answers,
-      output:  _output,
-      error:   errorMsg
+      ok:         answers.length > 0 || (errorMsg === null && varNames.length === 0),
+      answers:    answers,
+      output:     _output,
+      formInputs: _formInputs.slice(),
+      error:      errorMsg
     };
   }
 
@@ -2103,6 +2159,10 @@
    *   2. Displays the output produced by `write`/`nl`/`writeln` etc.
    *   3. Wraps all execution in error handling and displays errors clearly.
    *   4. Does not include execution traces.
+   *   5. Supports interactive forms via read_string/1-2, hidden_field/2, and
+   *      form_argument/2.  URL query parameters are passed to the Prolog
+   *      program as form arguments so the page can act as a simple CGI-style
+   *      application without a server.
    */
   // Returns true when the Prolog source defines at least one main/0 clause
   // (either a fact `main.` or a rule `main :- ...`).
@@ -2149,6 +2209,20 @@
 '              font-size: 0.87rem; line-height: 1.6; white-space: pre-wrap;\n' +
 '              word-break: break-word; min-height: 60px; }\n' +
 '    #output.has-error { color: #fca5a5; }\n' +
+'    #output:empty { display: none; }\n' +
+'    #pl-form { display: none; margin-top: 16px; }\n' +
+'    .field { margin-bottom: 14px; }\n' +
+'    .field label { display: block; font-size: 0.88rem; font-weight: 600;\n' +
+'                   margin-bottom: 4px; color: #444; }\n' +
+'    .text-input { width: 100%; padding: 8px 10px; border: 1px solid #d1d5db;\n' +
+'                  border-radius: 6px; font-size: 0.9rem; font-family: inherit;\n' +
+'                  background: #fff; color: #1a1a2e; outline: none; }\n' +
+'    .text-input:focus { border-color: #5271ff;\n' +
+'                        box-shadow: 0 0 0 2px rgba(82,113,255,0.15); }\n' +
+'    .submit-btn { background: #5271ff; color: #fff; border: none; border-radius: 6px;\n' +
+'                  padding: 8px 20px; font-size: 0.9rem; font-weight: 600;\n' +
+'                  cursor: pointer; margin-top: 4px; }\n' +
+'    .submit-btn:hover { background: #3a54d4; }\n' +
 '    footer { text-align: center; font-size: 0.75rem; color: #bbb; margin-top: 24px; }\n' +
 '    footer a { color: #5271ff; text-decoration: none; }\n' +
 '  </style>\n' +
@@ -2164,6 +2238,7 @@
 '  </div>\n') +
 '  <p class="label">Output</p>\n' +
 '  <pre id="output">Running main/0\u2026</pre>\n' +
+'  <form id="pl-form" method="get"></form>\n' +
 '  <footer>Generated by <a href="https://github.com/luciangreen/pl2js" target="_blank">pl2js</a></footer>\n' +
 '</div>\n' +
 '<script>\n' +
@@ -2174,19 +2249,64 @@ safeRuntime + '\n' +
 '  \'use strict\';\n' +
 '  var prog = ' + escapedProg + ';\n' +
 '  var outputEl = document.getElementById(\'output\');\n' +
+'  var formEl   = document.getElementById(\'pl-form\');\n' +
 '\n' +
 '  function showError(msg) {\n' +
 '    outputEl.textContent = \'Error: \' + msg;\n' +
 '    outputEl.className = \'has-error\';\n' +
 '  }\n' +
 '\n' +
+'  function buildForm(formInputs) {\n' +
+'    formEl.innerHTML = \'\';\n' +
+'    formInputs.forEach(function (fi) {\n' +
+'      if (fi.type === \'hidden\') {\n' +
+'        var inp = document.createElement(\'input\');\n' +
+'        inp.type  = \'hidden\';\n' +
+'        inp.name  = fi.name;\n' +
+'        inp.value = fi.value || \'\';\n' +
+'        formEl.appendChild(inp);\n' +
+'      } else {\n' +
+'        var div = document.createElement(\'div\');\n' +
+'        div.className = \'field\';\n' +
+'        if (fi.prompt) {\n' +
+'          var lbl = document.createElement(\'label\');\n' +
+'          lbl.setAttribute(\'for\', fi.name);\n' +
+'          lbl.textContent = fi.prompt;\n' +
+'          div.appendChild(lbl);\n' +
+'        }\n' +
+'        var inp = document.createElement(\'input\');\n' +
+'        inp.type      = \'text\';\n' +
+'        inp.id        = fi.name;\n' +
+'        inp.name      = fi.name;\n' +
+'        inp.className = \'text-input\';\n' +
+'        div.appendChild(inp);\n' +
+'        formEl.appendChild(div);\n' +
+'      }\n' +
+'    });\n' +
+'    var btn = document.createElement(\'button\');\n' +
+'    btn.type      = \'submit\';\n' +
+'    btn.className = \'submit-btn\';\n' +
+'    btn.textContent = \'Submit\';\n' +
+'    formEl.appendChild(btn);\n' +
+'    formEl.style.display = \'block\';\n' +
+'  }\n' +
+'\n' +
 '  try {\n' +
 '    if (!window.pl2js) { showError(\'pl2js runtime not available.\'); return; }\n' +
 '\n' +
-'    var result = pl2js.runQuery(prog, \'main.\');\n' +
+'    var formArgs = {};\n' +
+'    new URLSearchParams(window.location.search).forEach(function (v, k) {\n' +
+'      formArgs[k] = v;\n' +
+'    });\n' +
+'\n' +
+'    var result = pl2js.runQuery(prog, \'main.\', 10, formArgs);\n' +
 '\n' +
 '    if (result.error) {\n' +
 '      showError(result.error);\n' +
+'    } else if (result.formInputs && result.formInputs.length > 0) {\n' +
+'      outputEl.textContent = result.output || \'\';\n' +
+'      outputEl.className = \'\';\n' +
+'      buildForm(result.formInputs);\n' +
 '    } else if (!result.ok && !result.output) {\n' +
 '      outputEl.textContent = \'false. (main/0 has no solutions)\';\n' +
 '      outputEl.className = \'\';\n' +

@@ -1592,7 +1592,146 @@ test('write/nl output is captured correctly', () => {
 }());
 
 // ---------------------------------------------------------------------------
+// Form / CGI predicates
+// ---------------------------------------------------------------------------
+group('Form / CGI predicates');
+
+test('read_string/2 with no form args binds to empty atom and records a text formInput', () => {
+  const r = pl2js.runQuery('main :- read_string(\'Enter name:\', X), write(X).', 'main.');
+  assert.strictEqual(r.error, null);
+  assert.ok(r.formInputs.length >= 1);
+  const fi = r.formInputs[0];
+  assert.strictEqual(fi.type, 'text');
+  assert.strictEqual(fi.name, 'rs_0');
+  assert.strictEqual(fi.prompt, 'Enter name:');
+  assert.strictEqual(r.output, '');  // empty atom written
+});
+
+test('read_string/2 with matching form arg binds to submitted value', () => {
+  const r = pl2js.runQuery('main :- read_string(\'Enter name:\', X), write(X).', 'main.', 10, { rs_0: 'Alice' });
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'Alice');
+  assert.strictEqual(r.formInputs.length, 0);  // no pending inputs
+});
+
+test('read_string/1 with no form args records a text formInput (no prompt)', () => {
+  const r = pl2js.runQuery('main :- read_string(X), write(X).', 'main.');
+  assert.strictEqual(r.error, null);
+  assert.ok(r.formInputs.length >= 1);
+  const fi = r.formInputs[0];
+  assert.strictEqual(fi.type, 'text');
+  assert.strictEqual(fi.name, 'rs_0');
+  assert.strictEqual(fi.prompt, '');
+});
+
+test('read_string/1 with matching form arg binds value', () => {
+  const r = pl2js.runQuery('main :- read_string(X), write(X).', 'main.', 10, { rs_0: 'hello' });
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'hello');
+  assert.strictEqual(r.formInputs.length, 0);
+});
+
+test('multiple read_string/2 calls use sequential field names', () => {
+  const prog = 'main :- read_string(\'Name:\', N), read_string(\'Age:\', A), write(N), write(\' \'), write(A).';
+  const r = pl2js.runQuery(prog, 'main.');
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.formInputs.length, 2);
+  assert.strictEqual(r.formInputs[0].name, 'rs_0');
+  assert.strictEqual(r.formInputs[1].name, 'rs_1');
+});
+
+test('multiple read_string/2 calls with all form args supplied run to completion', () => {
+  const prog = 'main :- read_string(\'Name:\', N), read_string(\'Age:\', A), format(\'~w is ~w\', [N, A]).';
+  const r = pl2js.runQuery(prog, 'main.', 10, { rs_0: 'Bob', rs_1: '30' });
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'Bob is 30');
+  assert.strictEqual(r.formInputs.length, 0);
+});
+
+test('form_argument/2 succeeds and binds value when arg is present', () => {
+  const prog = 'main :- form_argument(color, C), write(C).';
+  const r = pl2js.runQuery(prog, 'main.', 10, { color: 'red' });
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'red');
+});
+
+test('form_argument/2 fails when arg is absent', () => {
+  const prog = 'main :- (form_argument(color, _) -> write(found) ; write(missing)).';
+  const r = pl2js.runQuery(prog, 'main.', 10, {});
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'missing');
+});
+
+test('hidden_field/2 records a hidden formInput', () => {
+  const prog = 'main :- hidden_field(step, 2), write(ok).';
+  const r = pl2js.runQuery(prog, 'main.', 10, {});
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'ok');
+  assert.ok(r.formInputs.length >= 1);
+  const fi = r.formInputs[0];
+  assert.strictEqual(fi.type, 'hidden');
+  assert.strictEqual(fi.name, 'step');
+  assert.strictEqual(fi.value, '2');
+});
+
+test('hidden_field/2 and read_string/2 together produce both hidden and text inputs', () => {
+  const prog = 'main :- hidden_field(step, 1), read_string(\'Email:\', _E).';
+  const r = pl2js.runQuery(prog, 'main.', 10, {});
+  assert.strictEqual(r.error, null);
+  const hidden = r.formInputs.filter(function (fi) { return fi.type === 'hidden'; });
+  const text   = r.formInputs.filter(function (fi) { return fi.type === 'text'; });
+  assert.strictEqual(hidden.length, 1);
+  assert.strictEqual(hidden[0].name, 'step');
+  assert.strictEqual(text.length, 1);
+  assert.strictEqual(text[0].name, 'rs_0');
+});
+
+test('runQuery returns empty formInputs array when no form predicates are used', () => {
+  const r = pl2js.runQuery('main :- write(hello).', 'main.');
+  assert.ok(Array.isArray(r.formInputs));
+  assert.strictEqual(r.formInputs.length, 0);
+});
+
+test('runQuery with non-object formArgs defaults gracefully', () => {
+  const r = pl2js.runQuery('main :- write(ok).', 'main.', 10, null);
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'ok');
+});
+
+// generateHtml form-related tests
+test('generateHtml: generated page includes form element', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  assert.ok(html.includes('<form id="pl-form"'));
+});
+
+test('generateHtml: generated page reads URL params into formArgs', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  assert.ok(html.includes('URLSearchParams'));
+  assert.ok(html.includes('formArgs'));
+});
+
+test('generateHtml: generated page passes formArgs to runQuery', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  assert.ok(html.includes('runQuery(prog'));
+  assert.ok(html.includes('formArgs'));
+});
+
+test('generateHtml: generated page includes buildForm helper', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  assert.ok(html.includes('buildForm'));
+  assert.ok(html.includes('formInputs'));
+});
+
+test('generateHtml: generated page includes form CSS', () => {
+  const html = pl2js.generateHtml(RUNTIME_SRC, 'main :- write(hello).');
+  assert.ok(html.includes('.submit-btn'));
+  assert.ok(html.includes('.text-input'));
+  assert.ok(html.includes('#pl-form'));
+});
+
+// ---------------------------------------------------------------------------
 // Summary
+
 // ---------------------------------------------------------------------------
 console.log('\n' + '─'.repeat(50));
 console.log('Results: ' + _passed + ' passed, ' + _failed + ' failed');
