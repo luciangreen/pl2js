@@ -708,7 +708,7 @@
   let   _output     = '';   // captured write/nl output
   let   _formArgs   = {};   // form arguments passed in (URL params / POST data)
   let   _formInputs = [];   // form inputs collected by read_string / hidden_field
-  let   _rsCount    = 0;    // sequential counter for read_string field names
+  let   _readStringCounter = 0;  // sequential counter for read_string field names
 
   function solve(goal, env, db, depth, k) {
     if (depth > MAX_DEPTH) throw new Error('Maximum depth exceeded (possible infinite loop)');
@@ -1606,7 +1606,8 @@
       const prompt     = promptTerm
         ? (promptTerm.type === 'atom' ? promptTerm.name : termToString(env, promptTerm))
         : '';
-      const fieldName = 'rs_' + _rsCount++;
+      // Field names follow the pattern 'rs_N' (read_string field index N).
+      const fieldName = 'rs_' + _readStringCounter++;
       const e2 = copyEnv(env);
       if (_formArgs[fieldName] !== undefined) {
         if (unify(e2, valueArg, mkAtom(String(_formArgs[fieldName])))) k(e2);
@@ -2059,7 +2060,7 @@
     _output     = '';
     _formArgs   = (formArgs && typeof formArgs === 'object') ? formArgs : {};
     _formInputs = [];
-    _rsCount    = 0;
+    _readStringCounter = 0;
 
     let db;
     try {
