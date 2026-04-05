@@ -307,6 +307,13 @@
     const tok = this.peek();
     if (!tok) throw new Error('Unexpected end of input');
 
+    // Prefix :- (fx 1200, directive syntax)
+    if (tok.t === 'op' && tok.v === ':-') {
+      this.next();
+      const arg = this.parseTerm(1199);
+      return mkCompound(':-', [arg]);
+    }
+
     // Prefix \+  (fy 900)
     if (tok.t === 'op' && tok.v === '\\+') {
       this.next();
@@ -453,14 +460,15 @@
     if (term.type === 'compound' && term.functor === ':-' && term.arity === 2) {
       return { head: term.args[0], body: term.args[1] };
     }
-    // Directives like :- use_module(...) — skip
+    // Directives like :- use_module(...) — return for special handling
     if (term.type === 'compound' && term.functor === ':-' && term.arity === 1) {
-      return null; // ignore directives
+      return { _directive: term.args[0] };
     }
     return { head: term, body: null };
   };
 
   // Parse a full Prolog source string into an array of {head, body} clauses.
+  // Handles :- include(File). directives by inlining the registered file's clauses.
   function parsePrologSource(src) {
     const toks = tokenize(src);
     const parser = new Parser(toks);
@@ -468,7 +476,24 @@
     while (parser.pos < parser.toks.length) {
       try {
         const cl = parser.parseClause();
-        if (cl) clauses.push(cl);
+        if (!cl) continue;
+        if (cl._directive) {
+          // Handle :- include(File). — inline clauses from the registered file
+          const d = cl._directive;
+          if (d.type === 'compound' && d.functor === 'include' && d.arity === 1) {
+            const fileArg = d.args[0];
+            if (fileArg.type === 'atom' && _vfs[fileArg.name]) {
+              const included = parsePrologSource(_vfs[fileArg.name]);
+              for (let i = 0; i < included.length; i++) clauses.push(included[i]);
+            } else if (fileArg.type === 'atom') {
+              // eslint-disable-next-line no-console
+              console.warn('[pl2js] include: file not registered in virtual FS: ' + fileArg.name);
+            }
+          }
+          // All other directives are silently ignored
+          continue;
+        }
+        clauses.push(cl);
       } catch (e) {
         // Skip to the next '.' and continue
         while (parser.pos < parser.toks.length && parser.toks[parser.pos].t !== 'end') {
@@ -721,6 +746,33 @@
   // SECTION 9: Built-in registry, prelude, and goal execution
   // =========================================================================
 
+  // Virtual file system used by :- include(File). directives.
+  // Keys are file paths (e.g. 'extras/strings.pl'); values are source strings.
+  // In Node.js the extras/ directory is loaded automatically.
+  // In browser environments call pl2js.registerFile(path, content) before
+  // the first runQuery() call to make extra files available to include.
+  const _vfs = Object.create(null);
+
+  // Auto-load extras/ in Node.js (requires fs module and __dirname).
+  if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
+    (function () {
+      try {
+        const _fs   = require('fs');
+        const _path = require('path');
+        const _extrasFiles = ['extras/strings.pl', 'extras/lists.pl', 'extras/pairs.pl'];
+        _extrasFiles.forEach(function (f) {
+          const full = _path.join(__dirname, f);
+          if (_fs.existsSync(full)) {
+            _vfs[f] = _fs.readFileSync(full, 'utf8');
+          } else {
+            // eslint-disable-next-line no-console
+            console.warn('[pl2js] prelude file not found: ' + full);
+          }
+        });
+      } catch (e) { /* fs not available — browser or restricted environment */ }
+    }());
+  }
+
   // Set of 'name/arity' keys for every predicate implemented natively in JS.
   // buildDatabase rejects user clauses whose key appears here.
   const _BUILTIN_KEYS = new Set([
@@ -779,29 +831,16 @@
   ]);
 
   // Prolog source loaded into every query database before user clauses.
-  // These predicates are "invisible" (not in the user's source) but fully
-  // callable.  They can be overridden by user code; only the JS-native
-  // predicates in _BUILTIN_KEYS are permanently protected.
+  // Each :- include(File). directive is resolved against the virtual file
+  // system (_vfs) populated above.  The predicate implementations live in
+  // extras/*.pl — this string is the single place that lists which files
+  // are part of the prelude; the predicates themselves are NOT duplicated
+  // here.  Only the JS-native predicates in _BUILTIN_KEYS are permanently
+  // protected; prelude predicates can be overridden by user code.
   const _PRELUDE_SOURCE = [
-    '% string_lower/2 and string_upper/2 — convenient aliases',
-    'string_lower(X, Y) :- downcase_atom(X, Y).',
-    'string_upper(X, Y) :- upcase_atom(X, Y).',
-    '% not_member/2 — succeeds when X is not in List',
-    'not_member(_, []).',
-    'not_member(X, [H|T]) :- X \\= H, not_member(X, T).',
-    '% max_member/2, min_member/2',
-    'max_member(Max, [Max]).',
-    'max_member(Max, [H|T]) :- max_member(TMax, T), (H @>= TMax -> Max = H ; Max = TMax).',
-    'min_member(Min, [Min]).',
-    'min_member(Min, [H|T]) :- min_member(TMin, T), (H @=< TMin -> Min = H ; Min = TMin).',
-    '% pairs_keys_values/3',
-    'pairs_keys_values([], [], []).',
-    'pairs_keys_values([K-V|Ps], [K|Ks], [V|Vs]) :- pairs_keys_values(Ps, Ks, Vs).',
-    '% pairs_keys/2, pairs_values/2',
-    'pairs_keys([], []).',
-    'pairs_keys([K-_|Ps], [K|Ks]) :- pairs_keys(Ps, Ks).',
-    'pairs_values([], []).',
-    'pairs_values([_-V|Ps], [V|Vs]) :- pairs_values(Ps, Vs).',
+    ":- include('extras/strings.pl').",
+    ":- include('extras/lists.pl').",
+    ":- include('extras/pairs.pl').",
   ].join('\n');
 
   // solve(goal, env, db, depth, k)
@@ -2686,7 +2725,18 @@ safeRuntime + '\n' +
     hasMainPredicate,
     generateHtml,
     /** Render a term to a display string (no environment). */
-    termToString: function (term) { return _termStr({}, term); }
+    termToString: function (term) { return _termStr({}, term); },
+    /**
+     * Register a file in the virtual file system so that
+     * :- include(Path). directives can resolve it.
+     * Call this before runQuery() in browser environments where the
+     * extras/ directory is not loaded automatically.
+     *
+     * @param {string} path    — file path as used in the include directive
+     *                           (e.g. 'extras/strings.pl')
+     * @param {string} content — Prolog source text of the file
+     */
+    registerFile: function (path, content) { _vfs[path] = content; }
   };
 
   if (typeof module !== 'undefined' && module.exports) {
