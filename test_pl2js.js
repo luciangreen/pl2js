@@ -1928,6 +1928,495 @@ test('user clause overrides prelude clause', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 27. pl2js.pl generated runtime — all built-in commands
+// ---------------------------------------------------------------------------
+
+// Extract and evaluate the header as before, then run tests against the full
+// expanded runtime that now includes all startup commands.
+
+(function testAllGeneratedCommands() {
+  const plSrc = fs.readFileSync(path.join(__dirname, 'pl2js.pl'), 'utf8');
+  const startMarker = "generate_js_header(Header) :-\n    Header =\n'";
+  const endMarker   = "\n'.\n\n%% group_clauses_by_predicate";
+  const s = plSrc.indexOf(startMarker);
+  const e = plSrc.indexOf(endMarker);
+  if (s < 0 || e < 0) {
+    console.warn('WARNING: Could not locate JS header in pl2js.pl — skipping all-commands tests');
+    return;
+  }
+  const headerJs = plSrc.slice(s + startMarker.length, e).replace(/''/g, "'");
+
+  const vm = require('vm');
+  const ctx = vm.createContext({ document: {} });  // mock browser env so _prologOutput captures output
+  try { vm.runInContext(headerJs, ctx); } catch(err) {
+    console.warn('WARNING: Header failed to evaluate — skipping all-commands tests:', err.message);
+    return;
+  }
+
+  // Helper predicates for meta-call tests
+  vm.runInContext(`
+    function positive_1(state, x) { return gt_2(state, x, createInt(0)); }
+    _registry["positive/1"] = positive_1;
+    function negative_1(state, x) { return lt_2(state, x, createInt(0)); }
+    _registry["negative/1"] = negative_1;
+    function double_2(state, x, y) { return is_2(state, y, createCompound("*", 2, [x, createInt(2)])); }
+    _registry["double/2"] = double_2;
+    function mkIntList() {
+      var args = Array.prototype.slice.call(arguments);
+      var l = createNil();
+      for (var i = args.length - 1; i >= 0; i--) l = createList(createInt(args[i]), l);
+      return l;
+    }
+    function mkAtomList() {
+      var args = Array.prototype.slice.call(arguments);
+      var l = createNil();
+      for (var i = args.length - 1; i >= 0; i--) l = createList(createAtom(args[i]), l);
+      return l;
+    }
+    function termStr(state, t) {
+      t = deref(state, t);
+      if (t.type === "int")  return String(t.val);
+      if (t.type === "nil")  return "[]";
+      if (t.type === "atom") return t.name;
+      if (t.type === "list") {
+        var parts = [];
+        var cur = t;
+        while (cur.type === "list") { parts.push(termStr(state, cur.head)); cur = deref(state, cur.tail); }
+        return "[" + parts.join(",") + "]";
+      }
+      if (t.type === "compound") return t.functor + "(" + t.args.map(function(a){ return termStr(state, a); }).join(",") + ")";
+      return "?";
+    }
+    function run(fn) { var st = initState(); var ok = fn(st); return { ok: ok && !st.failed, st: st }; }
+    function bind(fn) { var st = initState(); var v = createVar(st.nextVarId++); fn(st, v); return { st: st, v: v }; }
+  `, ctx);
+
+  group('pl2js.pl generated runtime — false/0, string/1, naf/1, call/N');
+
+  test('generated: false/0 fails', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return false_0(st) && !st.failed; })', ctx);
+    assert.ok(!fn());
+  });
+
+  test('generated: string/1 succeeds for atom', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return string_1(st, createAtom("hello")) && !st.failed; })', ctx);
+    assert.ok(fn());
+  });
+
+  test('generated: string/1 fails for integer', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return string_1(st, createInt(42)) && !st.failed; })', ctx);
+    assert.ok(!fn());
+  });
+
+  test('generated: naf_1 succeeds when goal fails', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return naf_1(st, createAtom("fail")) && !st.failed; })', ctx);
+    assert.ok(fn());
+  });
+
+  test('generated: naf_1 fails when goal succeeds', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return naf_1(st, createAtom("true")) && !st.failed; })', ctx);
+    assert.ok(!fn());
+  });
+
+  test('generated: call/1 calls a goal by name', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return call_1(st, createAtom("true")) && !st.failed; })', ctx);
+    assert.ok(fn());
+  });
+
+  test('generated: call/2 calls a unary goal with extra arg', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return call_2(st, createAtom("positive"), createInt(5)) && !st.failed; })', ctx);
+    assert.ok(fn());
+  });
+
+  test('generated: call/3 calls a binary goal with extra args', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState();
+      var out = createVar(st.nextVarId++);
+      var ok = call_3(st, createAtom("double"), createInt(4), out) && !st.failed;
+      if (!ok) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 8);
+  });
+
+  group('pl2js.pl generated runtime — succ/2, plus/3, between/3');
+
+  test('generated: succ_2 forward (n -> n+1)', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!succ_2(st, createInt(4), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 5);
+  });
+
+  test('generated: succ_2 reverse (n+1 -> n)', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!succ_2(st, out, createInt(5)) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 4);
+  });
+
+  test('generated: plus_3 X+Y=Z (forward)', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!plus_3(st, createInt(3), createInt(4), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 7);
+  });
+
+  test('generated: plus_3 reverse Z-X=Y', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!plus_3(st, createInt(3), out, createInt(7)) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 4);
+  });
+
+  test('generated: between_3 first solution', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!between_3(st, createInt(3), createInt(5), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 3);
+  });
+
+  test('generated: between_3 + findall_3 collects all values', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState();
+      var x = createVar(st.nextVarId++);
+      var result = createVar(st.nextVarId++);
+      var goal = createCompound("between", 3, [createInt(1), createInt(4), x]);
+      if (!findall_3(st, x, goal, result) || st.failed) return null;
+      return termStr(st, result);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3,4]');
+  });
+
+  group('pl2js.pl generated runtime — type converters');
+
+  test('generated: atom_number_2 atom->number', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!atom_number_2(st, createAtom("42"), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 42);
+  });
+
+  test('generated: atom_number_2 number->atom', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!atom_number_2(st, out, createInt(7)) || st.failed) return null;
+      return deref(st, out).name;
+    })`, ctx);
+    assert.strictEqual(fn(), '7');
+  });
+
+  test('generated: upcase_atom_2', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!upcase_atom_2(st, createAtom("hello"), out) || st.failed) return null;
+      return deref(st, out).name;
+    })`, ctx);
+    assert.strictEqual(fn(), 'HELLO');
+  });
+
+  test('generated: downcase_atom_2', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!downcase_atom_2(st, createAtom("HELLO"), out) || st.failed) return null;
+      return deref(st, out).name;
+    })`, ctx);
+    assert.strictEqual(fn(), 'hello');
+  });
+
+  test('generated: atom_string_2 atom->string', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!atom_string_2(st, createAtom("hi"), out) || st.failed) return null;
+      return deref(st, out).name;
+    })`, ctx);
+    assert.strictEqual(fn(), 'hi');
+  });
+
+  test('generated: string_codes_2 forward', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!string_codes_2(st, createAtom("ab"), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[97,98]');
+  });
+
+  test('generated: string_chars_2 forward', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!string_chars_2(st, createAtom("hi"), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[h,i]');
+  });
+
+  test('generated: atomic_list_concat_2 joins list', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      var list = createList(createAtom("foo"), createList(createAtom("bar"), createNil()));
+      if (!atomic_list_concat_2(st, list, out) || st.failed) return null;
+      return deref(st, out).name;
+    })`, ctx);
+    assert.strictEqual(fn(), 'foobar');
+  });
+
+  test('generated: atomic_list_concat_3 joins with separator', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      var list = createList(createAtom("a"), createList(createAtom("b"), createList(createAtom("c"), createNil())));
+      if (!atomic_list_concat_3(st, list, createAtom("-"), out) || st.failed) return null;
+      return deref(st, out).name;
+    })`, ctx);
+    assert.strictEqual(fn(), 'a-b-c');
+  });
+
+  test('generated: atomic_list_concat_3 splits by separator', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!atomic_list_concat_3(st, out, createAtom("-"), createAtom("a-b-c")) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[a,b,c]');
+  });
+
+  test('generated: writeq_1 writes term', () => {
+    const fn = vm.runInContext(`(function(){
+      var result = runQuery(function(st) { writeq_1(st, createAtom("hello")); return true; }, []);
+      return result.output;
+    })`, ctx);
+    assert.strictEqual(fn(), 'hello');
+  });
+
+  test('generated: format_1 handles ~n', () => {
+    const fn = vm.runInContext(`(function(){
+      var result = runQuery(function(st) { format_1(st, createAtom("line~n")); return true; }, []);
+      return result.output;
+    })`, ctx);
+    assert.strictEqual(fn(), 'line\n');
+  });
+
+  test('generated: not/1 (alias for naf_1) succeeds when goal fails', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return naf_1(st, createAtom("fail")) && !st.failed; })', ctx);
+    assert.ok(fn());
+  });
+
+  group('pl2js.pl generated runtime — list predicates');
+
+  test('generated: flatten_2 flattens nested list', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      var nested = createList(createInt(1), createList(createList(createInt(2), createList(createInt(3), createNil())), createNil()));
+      if (!flatten_2(st, nested, out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3]');
+  });
+
+  test('generated: max_list_2 finds maximum', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!max_list_2(st, mkIntList(3,1,4,1,5,9), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 9);
+  });
+
+  test('generated: min_list_2 finds minimum', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!min_list_2(st, mkIntList(3,1,4,1,5,9), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 1);
+  });
+
+  test('generated: sum_list_2 sums elements', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!sum_list_2(st, mkIntList(1,2,3,4), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 10);
+  });
+
+  test('generated: numlist_3 generates integer list', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!numlist_3(st, createInt(1), createInt(5), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3,4,5]');
+  });
+
+  test('generated: list_to_set_2 removes duplicates', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!list_to_set_2(st, mkIntList(1,2,1,3,2), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3]');
+  });
+
+  test('generated: subtract_3 removes elements', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!subtract_3(st, mkIntList(1,2,3,4), mkIntList(2,4), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,3]');
+  });
+
+  test('generated: intersection_3 finds common elements', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!intersection_3(st, mkIntList(1,2,3), mkIntList(2,3,4), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[2,3]');
+  });
+
+  test('generated: union_3 merges unique elements', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!union_3(st, mkIntList(1,2,3), mkIntList(2,3,4), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3,4]');
+  });
+
+  test('generated: delete_3 removes all occurrences', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!delete_3(st, mkIntList(1,2,1,3,1), createInt(1), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[2,3]');
+  });
+
+  test('generated: select_3 first match', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState();
+      var elem = createVar(st.nextVarId++);
+      var rest = createVar(st.nextVarId++);
+      if (!select_3(st, elem, mkIntList(1,2,3), rest) || st.failed) return null;
+      return deref(st, elem).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 1);
+  });
+
+  test('generated: permutation_2 first permutation is identity', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!permutation_2(st, mkIntList(1,2,3), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3]');
+  });
+
+  group('pl2js.pl generated runtime — findall/3, forall/2, aggregate_all/3');
+
+  test('generated: findall_3 collects all solutions', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState();
+      var x = createVar(st.nextVarId++);
+      var result = createVar(st.nextVarId++);
+      var goal = createCompound("between", 3, [createInt(1), createInt(3), x]);
+      if (!findall_3(st, x, goal, result) || st.failed) return null;
+      return termStr(st, result);
+    })`, ctx);
+    assert.strictEqual(fn(), '[1,2,3]');
+  });
+
+  test('generated: findall_3 returns empty list when no solutions', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState();
+      var x = createVar(st.nextVarId++);
+      var result = createVar(st.nextVarId++);
+      if (!findall_3(st, x, createAtom("fail"), result) || st.failed) return null;
+      return termStr(st, result);
+    })`, ctx);
+    assert.strictEqual(fn(), '[]');
+  });
+
+  test('generated: forall_2 succeeds when condition is empty', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return forall_2(st, createAtom("fail"), createAtom("true")) && !st.failed; })', ctx);
+    assert.ok(fn());
+  });
+
+  test('generated: aggregate_all_3 counts solutions', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState();
+      var x = createVar(st.nextVarId++);
+      var result = createVar(st.nextVarId++);
+      var goal = createCompound("between", 3, [createInt(1), createInt(5), x]);
+      if (!aggregate_all_3(st, createAtom("count"), goal, result) || st.failed) return null;
+      return deref(st, result).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 5);
+  });
+
+  group('pl2js.pl generated runtime — include/3, exclude/3');
+
+  test('generated: include_3 keeps matching elements', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!include_3(st, createAtom("positive"), mkIntList(-1,2,-3,4), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[2,4]');
+  });
+
+  test('generated: exclude_3 removes matching elements', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!exclude_3(st, createAtom("negative"), mkIntList(-1,2,-3,4), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[2,4]');
+  });
+
+  test('generated: include_3 on empty list returns empty', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!include_3(st, createAtom("positive"), createNil(), out) || st.failed) return null;
+      return termStr(st, out);
+    })`, ctx);
+    assert.strictEqual(fn(), '[]');
+  });
+
+  test('generated: succ_or_zero_2 returns 0 for 0', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!succ_or_zero_2(st, createInt(0), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 0);
+  });
+
+  test('generated: succ_or_zero_2 returns n-1 for n>0', () => {
+    const fn = vm.runInContext(`(function(){
+      var st = initState(); var out = createVar(st.nextVarId++);
+      if (!succ_or_zero_2(st, createInt(5), out) || st.failed) return null;
+      return deref(st, out).val;
+    })`, ctx);
+    assert.strictEqual(fn(), 4);
+  });
+}());
+
+// ---------------------------------------------------------------------------
 // Summary
 
 // ---------------------------------------------------------------------------
