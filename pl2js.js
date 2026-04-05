@@ -14,14 +14,25 @@
 //   conjunction (,), disjunction (;), if-then-else (Cond -> Then ; Else),
 //   cut (!), negation-as-failure (\+), unification (=), \=, ==, \==,
 //   arithmetic (is/2, >, <, >=, =<, =:=, =\=),
-//   built-ins: true/0, fail/0, nl/0, write/1, writeln/1, tab/1,
+//   built-ins: true/0, fail/0, nl/0, write/1, writeln/1, writeq/1, tab/1,
 //              atom/1, integer/1, number/1, var/1, nonvar/1, compound/1,
-//              atomic/1, is_list/1, atom_concat/3, atom_length/2, atom_chars/2,
-//              number_codes/2 (partial), length/2, findall/3, succ/2, plus/3,
-//              char_code/2 (partial), functor/3.
+//              atomic/1, is_list/1, atom_concat/3, atom_length/2,
+//              atom_chars/2, atom_codes/2, atom_string/2, atom_number/2,
+//              number_codes/2, number_chars/2, number_string/2,
+//              char_code/2, term_to_atom/2, term_string/2,
+//              string_to_atom/2, string_codes/2, string_chars/2,
+//              atomic_list_concat/2-3,
+//              length/2, findall/3, succ/2, plus/3, functor/3,
+//              flatten/2, max_list/2, min_list/2, sum_list/2, numlist/3,
+//              maplist/2-5, include/3, exclude/3, convlist/3, foldl/4-7.
 //
 // Not supported (by design): floats, assert/retract, modules, DCG, exceptions,
 //   operator declarations, full ISO compliance.
+//
+// Auto-loaded at startup (invisible to user programs, cannot be redefined):
+//   A small Prolog prelude (_PRELUDE_SOURCE) is parsed and merged into every
+//   query database before user clauses.  Predicates whose name/arity appear in
+//   _BUILTIN_KEYS (JS-native) are rejected when user code tries to define them.
 
 (function (root) {
   'use strict';
@@ -582,12 +593,23 @@
     return '?/0';
   }
 
-  function buildDatabase(clauses) {
-    const db = Object.create(null); // 'name/arity' -> [{head, body}]
+  // buildDatabase(clauses, opts)
+  //   opts.rejectBuiltins (default true) — throw on clauses that redefine a
+  //   JS-native built-in listed in _BUILTIN_KEYS.
+  //   opts.system (default false) — mark all clauses as system predicates
+  //   (loaded from the prelude; they can be overridden by user code but are
+  //   not "visible" in the user's source).
+  function buildDatabase(clauses, opts) {
+    const rejectBuiltins = !opts || opts.rejectBuiltins !== false;
+    const system         = opts && opts.system === true;
+    const db = Object.create(null); // 'name/arity' -> [{head, body, system?}]
     for (const cl of clauses) {
       const key = predicateKey(cl.head);
+      if (rejectBuiltins && _BUILTIN_KEYS.has(key)) {
+        throw new Error('Permission error: cannot redefine built-in predicate ' + key);
+      }
       if (!db[key]) db[key] = [];
-      db[key].push(cl);
+      db[key].push(system ? Object.assign({}, cl, { system: true }) : cl);
     }
     return db;
   }
@@ -696,8 +718,93 @@
   }
 
   // =========================================================================
-  // SECTION 9: Goal execution (CPS-style backtracking)
+  // SECTION 9: Built-in registry, prelude, and goal execution
   // =========================================================================
+
+  // Set of 'name/arity' keys for every predicate implemented natively in JS.
+  // buildDatabase rejects user clauses whose key appears here.
+  const _BUILTIN_KEYS = new Set([
+    // Control flow
+    'true/0', 'fail/0', 'false/0', 'nl/0', '!/0',
+    ',/2', ';/2', '->/2', '\\+/1', 'not/1',
+    // Unification / comparison
+    '=/2', '\\=/2', '==/2', '\\==/2',
+    '@</2', '@>/2', '@=</2', '@>=/2', 'compare/3',
+    // Arithmetic
+    'is/2', '>/2', '</2', '>=/2', '=</2', '=:=/2', '=\\=/2',
+    // I/O
+    'write/1', 'writeln/1', 'writeq/1', 'write_term/2', 'print/1',
+    'tab/1', 'format/1', 'format/2',
+    // Type checks
+    'atom/1', 'integer/1', 'number/1', 'float/1',
+    'var/1', 'nonvar/1', 'compound/1', 'atomic/1', 'callable/1',
+    'is_list/1', 'ground/1', 'string/1',
+    // Term manipulation
+    'functor/3', 'arg/3', '=../2', 'copy_term/2',
+    // Atom / string / char conversions (all directions)
+    'atom_length/2', 'atom_concat/3',
+    'atom_chars/2', 'atom_codes/2', 'atom_number/2', 'atom_string/2',
+    'number_codes/2', 'number_chars/2', 'number_string/2',
+    'char_code/2',
+    'term_to_atom/2', 'term_string/2',
+    'upcase_atom/2', 'downcase_atom/2',
+    'string_concat/3', 'string_to_atom/2', 'string_length/2',
+    'string_codes/2', 'string_chars/2',
+    'atomic_list_concat/2', 'atomic_list_concat/3',
+    'char_type/2',
+    // List predicates
+    'length/2', 'last/2', 'nth0/3', 'nth1/3', 'reverse/2',
+    'sort/2', 'msort/2',
+    'flatten/2', 'max_list/2', 'min_list/2', 'sum_list/2', 'numlist/3',
+    'list_to_set/2', 'permutation/2', 'select/3',
+    'subtract/3', 'intersection/3', 'union/3', 'delete/3',
+    // Findall family
+    'findall/3', 'aggregate_all/3', 'bagof/3', 'setof/3', 'forall/2',
+    // Control
+    'once/1', 'ignore/1',
+    'call/1', 'call/2', 'call/3', 'call/4',
+    'call/5', 'call/6', 'call/7', 'call/8',
+    // Arithmetic helpers
+    'succ/2', 'plus/3', 'between/3', 'succ_or_zero/2',
+    // Higher-order
+    'maplist/2', 'maplist/3', 'maplist/4', 'maplist/5',
+    'include/3', 'exclude/3', 'convlist/3',
+    'foldl/4', 'foldl/5', 'foldl/6', 'foldl/7',
+    // Side-effect / meta
+    'assert/1', 'asserta/1', 'assertz/1', 'retract/1', 'abolish/1',
+    'nb_getval/2', 'nb_setval/2', 'b_setval/2', 'b_getval/2',
+    'read_term/2', 'with_output_to/2', 'predsort/3',
+    // Form / CGI
+    'read_string/1', 'read_string/2', 'form_argument/2', 'hidden_field/2',
+  ]);
+
+  // Prolog source loaded into every query database before user clauses.
+  // These predicates are "invisible" (not in the user's source) but fully
+  // callable.  They can be overridden by user code; only the JS-native
+  // predicates in _BUILTIN_KEYS are permanently protected.
+  const _PRELUDE_SOURCE = [
+    '% string_lower/2 and string_upper/2 — convenient aliases',
+    'string_lower(X, Y) :- downcase_atom(X, Y).',
+    'string_upper(X, Y) :- upcase_atom(X, Y).',
+    '% not_member/2 — succeeds when X is not in List',
+    'not_member(_, []).',
+    'not_member(X, [H|T]) :- X \\= H, not_member(X, T).',
+    '% max_member/2, min_member/2',
+    'max_member(Max, [Max]).',
+    'max_member(Max, [H|T]) :- max_member(TMax, T), (H @>= TMax -> Max = H ; Max = TMax).',
+    'min_member(Min, [Min]).',
+    'min_member(Min, [H|T]) :- min_member(TMin, T), (H @=< TMin -> Min = H ; Min = TMin).',
+    '% pairs_keys_values/3',
+    'pairs_keys_values([], [], []).',
+    'pairs_keys_values([K-V|Ps], [K|Ks], [V|Vs]) :- pairs_keys_values(Ps, Ks, Vs).',
+    '% pairs_keys/2, pairs_values/2',
+    'pairs_keys([], []).',
+    'pairs_keys([K-_|Ps], [K|Ks]) :- pairs_keys(Ps, Ks).',
+    'pairs_values([], []).',
+    'pairs_values([_-V|Ps], [V|Vs]) :- pairs_values(Ps, Vs).',
+    '% nth0/3 and nth1/3 with generation mode (var index)',
+    '% (JS native handles the lookup mode; Prolog fallback adds generation)',
+  ].join('\n');
 
   // solve(goal, env, db, depth, k)
   //   Calls k(env_solution) for each solution.
@@ -997,55 +1104,125 @@
       return;
     }
     if (f === 'atom_codes' && a === 2) {
-      const t = deref(env, goal.args[0]);
-      if (t.type === 'atom') {
-        const codes = arrayToList(t.name.split('').map(c => mkInt(c.charCodeAt(0))));
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'atom' || t.type === 'int') {
+        // Forward: atom/number → code list
+        const s = t.type === 'atom' ? t.name : String(t.val);
+        const codes = arrayToList(s.split('').map(c => mkInt(c.charCodeAt(0))));
         const e2 = copyEnv(env);
         if (unify(e2, goal.args[1], codes)) k(e2);
+      } else if (t.type === 'var') {
+        // Reverse: code list → atom
+        const arr = listToArray(t2, env);
+        if (arr) {
+          let s = ''; let ok = true;
+          for (const el of arr) {
+            const d = deref(env, el);
+            if (d.type !== 'int') { ok = false; break; }
+            s += String.fromCharCode(d.val);
+          }
+          if (ok) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkAtom(s))) k(e2); }
+        }
       }
       return;
     }
     if (f === 'char_code' && a === 2) {
       const t1 = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
       if (t1.type === 'atom' && t1.name.length === 1) {
+        // Forward: char → code
         const e2 = copyEnv(env);
         if (unify(e2, goal.args[1], mkInt(t1.name.charCodeAt(0)))) k(e2);
+      } else if (t1.type === 'var' && t2.type === 'int') {
+        // Reverse: code → char
+        const e2 = copyEnv(env);
+        if (unify(e2, goal.args[0], mkAtom(String.fromCharCode(t2.val)))) k(e2);
       }
       return;
     }
     if (f === 'number_codes' && a === 2) {
-      const t = deref(env, goal.args[0]);
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
       if (t.type === 'int') {
+        // Forward: number → code list
         const codes = arrayToList(String(t.val).split('').map(c => mkInt(c.charCodeAt(0))));
         const e2 = copyEnv(env);
         if (unify(e2, goal.args[1], codes)) k(e2);
-      }
-      return;
-    }
-    if (f === 'number_chars' && a === 2) {
-      const t = deref(env, goal.args[0]);
-      if (t.type === 'int') {
-        const chars = arrayToList(String(t.val).split('').map(c => mkAtom(c)));
-        const e2 = copyEnv(env);
-        if (unify(e2, goal.args[1], chars)) k(e2);
-      }
-      return;
-    }
-    if (f === 'atom_number' && a === 2) {
-      const t = deref(env, goal.args[0]);
-      if (t.type === 'atom') {
-        const n = parseInt(t.name, 10);
-        if (!isNaN(n)) {
-          const e2 = copyEnv(env);
-          if (unify(e2, goal.args[1], mkInt(n))) k(e2);
+      } else if (t.type === 'var') {
+        // Reverse: code list → number
+        const arr = listToArray(t2, env);
+        if (arr) {
+          let s = ''; let ok = true;
+          for (const el of arr) {
+            const d = deref(env, el);
+            if (d.type !== 'int') { ok = false; break; }
+            s += String.fromCharCode(d.val);
+          }
+          if (ok) {
+            const n = parseInt(s, 10);
+            if (!isNaN(n)) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkInt(n))) k(e2); }
+          }
         }
       }
       return;
     }
+    if (f === 'number_chars' && a === 2) {
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'int') {
+        // Forward: number → char list
+        const chars = arrayToList(String(t.val).split('').map(c => mkAtom(c)));
+        const e2 = copyEnv(env);
+        if (unify(e2, goal.args[1], chars)) k(e2);
+      } else if (t.type === 'var') {
+        // Reverse: char list → number
+        const arr = listToArray(t2, env);
+        if (arr) {
+          let s = ''; let ok = true;
+          for (const el of arr) {
+            const d = deref(env, el);
+            if (d.type !== 'atom') { ok = false; break; }
+            s += d.name;
+          }
+          if (ok) {
+            const n = parseInt(s, 10);
+            if (!isNaN(n)) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkInt(n))) k(e2); }
+          }
+        }
+      }
+      return;
+    }
+    if (f === 'atom_number' && a === 2) {
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'atom') {
+        // Forward: atom → number
+        const n = parseInt(t.name, 10);
+        if (!isNaN(n)) { const e2 = copyEnv(env); if (unify(e2, goal.args[1], mkInt(n))) k(e2); }
+      } else if (t.type === 'var' && t2.type === 'int') {
+        // Reverse: number → atom
+        const e2 = copyEnv(env);
+        if (unify(e2, goal.args[0], mkAtom(String(t2.val)))) k(e2);
+      }
+      return;
+    }
     if (f === 'term_to_atom' && a === 2) {
-      const t = deref(env, goal.args[0]);
-      const e2 = copyEnv(env);
-      if (unify(e2, goal.args[1], mkAtom(termToString(env, t)))) k(e2);
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type !== 'var') {
+        // Forward: term → atom
+        const e2 = copyEnv(env);
+        if (unify(e2, goal.args[1], mkAtom(termToString(env, t)))) k(e2);
+      } else if (t2.type === 'atom') {
+        // Reverse: parse atom text as a term
+        try {
+          const toks = tokenize(t2.name + '.');
+          const parser = new Parser(toks);
+          const cl = parser.parseClause();
+          if (cl) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], cl.head)) k(e2); }
+        } catch (_) { /* parse failure → predicate fails */ }
+      }
       return;
     }
     if (f === 'upcase_atom' && a === 2) {
@@ -1578,10 +1755,16 @@
       return;
     }
     if (f === 'string_to_atom' && a === 2) {
-      const t = deref(env, goal.args[0]);
-      if (t.type === 'atom') {
-        const e2 = copyEnv(env);
-        if (unify(e2, goal.args[1], t)) k(e2);
+      // Both directions: string_to_atom(?String, ?Atom)
+      // In this implementation strings and atoms are the same type.
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'atom' || t.type === 'int') {
+        const s = t.type === 'atom' ? t.name : String(t.val);
+        const e2 = copyEnv(env); if (unify(e2, goal.args[1], mkAtom(s))) k(e2);
+      } else if (t.type === 'var' && (t2.type === 'atom' || t2.type === 'int')) {
+        const s = t2.type === 'atom' ? t2.name : String(t2.val);
+        const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkAtom(s))) k(e2);
       }
       return;
     }
@@ -1591,6 +1774,141 @@
         const e2 = copyEnv(env);
         if (unify(e2, goal.args[1], mkInt(t.name.length))) k(e2);
       }
+      return;
+    }
+
+    // ---- New type converters ----
+    if (f === 'atom_string' && a === 2) {
+      // atom_string(?Atom, ?String) — bidirectional; numbers convert too
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'atom' || t.type === 'int') {
+        const s = t.type === 'atom' ? t.name : String(t.val);
+        const e2 = copyEnv(env); if (unify(e2, goal.args[1], mkAtom(s))) k(e2);
+      } else if (t.type === 'var' && (t2.type === 'atom' || t2.type === 'int')) {
+        const s = t2.type === 'atom' ? t2.name : String(t2.val);
+        const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkAtom(s))) k(e2);
+      }
+      return;
+    }
+    if (f === 'number_string' && a === 2) {
+      // number_string(?Number, ?String) — bidirectional
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'int') {
+        const e2 = copyEnv(env); if (unify(e2, goal.args[1], mkAtom(String(t.val)))) k(e2);
+      } else if (t.type === 'var' && t2.type === 'atom') {
+        const n = parseInt(t2.name, 10);
+        if (!isNaN(n)) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkInt(n))) k(e2); }
+      }
+      return;
+    }
+    if (f === 'term_string' && a === 2) {
+      // term_string(?Term, ?String) — like term_to_atom but for strings
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type !== 'var') {
+        const e2 = copyEnv(env); if (unify(e2, goal.args[1], mkAtom(termToString(env, t)))) k(e2);
+      } else if (t2.type === 'atom') {
+        try {
+          const toks = tokenize(t2.name + '.');
+          const parser = new Parser(toks);
+          const cl = parser.parseClause();
+          if (cl) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], cl.head)) k(e2); }
+        } catch (_) { /* parse failure → predicate fails */ }
+      }
+      return;
+    }
+    if (f === 'string_codes' && a === 2) {
+      // string_codes(?String, ?Codes) — bidirectional
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'atom') {
+        const codes = arrayToList(t.name.split('').map(c => mkInt(c.charCodeAt(0))));
+        const e2 = copyEnv(env); if (unify(e2, goal.args[1], codes)) k(e2);
+      } else if (t.type === 'var') {
+        const arr = listToArray(t2, env);
+        if (arr) {
+          let s = ''; let ok = true;
+          for (const el of arr) {
+            const d = deref(env, el);
+            if (d.type !== 'int') { ok = false; break; }
+            s += String.fromCharCode(d.val);
+          }
+          if (ok) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkAtom(s))) k(e2); }
+        }
+      }
+      return;
+    }
+    if (f === 'string_chars' && a === 2) {
+      // string_chars(?String, ?Chars) — bidirectional
+      const t  = deref(env, goal.args[0]);
+      const t2 = deref(env, goal.args[1]);
+      if (t.type === 'atom') {
+        const chars = arrayToList(t.name.split('').map(c => mkAtom(c)));
+        const e2 = copyEnv(env); if (unify(e2, goal.args[1], chars)) k(e2);
+      } else if (t.type === 'var') {
+        const arr = listToArray(t2, env);
+        if (arr) {
+          let s = ''; let ok = true;
+          for (const el of arr) {
+            const d = deref(env, el);
+            if (d.type !== 'atom') { ok = false; break; }
+            s += d.name;
+          }
+          if (ok) { const e2 = copyEnv(env); if (unify(e2, goal.args[0], mkAtom(s))) k(e2); }
+        }
+      }
+      return;
+    }
+    if (f === 'atomic_list_concat' && a === 2) {
+      // atomic_list_concat(+List, ?Atom) — concat list of atomics
+      const lst = listToArray(deref(env, goal.args[0]), env);
+      if (lst) {
+        let s = ''; let ok = true;
+        for (const el of lst) {
+          const d = deref(env, el);
+          if (d.type === 'atom')     s += d.name;
+          else if (d.type === 'int') s += String(d.val);
+          else { ok = false; break; }
+        }
+        if (ok) { const e2 = copyEnv(env); if (unify(e2, goal.args[1], mkAtom(s))) k(e2); }
+      }
+      return;
+    }
+    if (f === 'atomic_list_concat' && a === 3) {
+      // atomic_list_concat(+List, +Sep, ?Atom) — join with separator
+      // Also reverse: atomic_list_concat(-List, +Sep, +Atom) — split by separator
+      const sepTerm  = deref(env, goal.args[1]);
+      const atomTerm = deref(env, goal.args[2]);
+      const lstTerm  = deref(env, goal.args[0]);
+      if (lstTerm.type !== 'var') {
+        // Forward: join
+        const lst = listToArray(lstTerm, env);
+        if (lst && (sepTerm.type === 'atom' || sepTerm.type === 'int')) {
+          const sep = sepTerm.type === 'atom' ? sepTerm.name : String(sepTerm.val);
+          let ok = true;
+          const parts = [];
+          for (const el of lst) {
+            const d = deref(env, el);
+            if (d.type === 'atom')     parts.push(d.name);
+            else if (d.type === 'int') parts.push(String(d.val));
+            else { ok = false; break; }
+          }
+          if (ok) { const e2 = copyEnv(env); if (unify(e2, goal.args[2], mkAtom(parts.join(sep)))) k(e2); }
+        }
+      } else if (atomTerm.type === 'atom' && (sepTerm.type === 'atom' || sepTerm.type === 'int')) {
+        // Reverse: split
+        const sep = sepTerm.type === 'atom' ? sepTerm.name : String(sepTerm.val);
+        const parts = sep === '' ? atomTerm.name.split('') : atomTerm.name.split(sep);
+        const lst = arrayToList(parts.map(p => mkAtom(p)));
+        const e2 = copyEnv(env); if (unify(e2, goal.args[0], lst)) k(e2);
+      }
+      return;
+    }
+    if (f === 'writeq' && a === 1) {
+      _output += termToString(env, goal.args[0]);
+      k(env);
       return;
     }
 
@@ -2044,7 +2362,7 @@
   // =========================================================================
 
   /**
-   * runQuery(programSource, queryString, maxAnswers)
+   * runQuery(programSource, queryString, maxAnswers, formArgs)
    *
    * Parse `programSource` as a set of Prolog clauses, then execute `queryString`
    * as a query.  Returns:
@@ -2054,6 +2372,11 @@
    *     output:  string,           // text written by write/nl/writeln
    *     error:   string|null       // error message if something went wrong
    *   }
+   *
+   * The Prolog prelude (_PRELUDE_SOURCE) is always merged into the database
+   * before user clauses, making its predicates available in every query.
+   * Attempting to define a clause whose name/arity appears in _BUILTIN_KEYS
+   * (JS-native predicates) causes an immediate error.
    */
   function runQuery(programSource, queryString, maxAnswers, formArgs) {
     maxAnswers = maxAnswers || 10;
@@ -2064,8 +2387,37 @@
 
     let db;
     try {
-      const clauses = parsePrologSource(programSource);
-      db = buildDatabase(clauses);
+      // 1. Parse user source — reject any redefinition of JS built-ins.
+      const userClauses = parsePrologSource(programSource);
+      for (const cl of userClauses) {
+        const key = predicateKey(cl.head);
+        if (_BUILTIN_KEYS.has(key)) {
+          return { ok: false, answers: [], output: '',
+                   error: 'Permission error: cannot redefine built-in predicate ' + key };
+        }
+      }
+
+      // 2. Parse the prelude (silent, system predicates).
+      const preludeClauses = parsePrologSource(_PRELUDE_SOURCE);
+
+      // 3. Collect the set of predicate keys defined by user code.
+      const userKeys = new Set(userClauses.map(cl => predicateKey(cl.head)));
+
+      // 4. Merge into one database: prelude clauses are loaded first as system
+      //    predicates, but any predicate key that the user also defines is
+      //    completely replaced by the user's clauses (user code wins).
+      db = buildDatabase([], { rejectBuiltins: false });
+      for (const cl of preludeClauses) {
+        const key = predicateKey(cl.head);
+        if (userKeys.has(key)) continue; // user overrides this prelude predicate
+        if (!db[key]) db[key] = [];
+        db[key].push(Object.assign({}, cl, { system: true }));
+      }
+      for (const cl of userClauses) {
+        const key = predicateKey(cl.head);
+        if (!db[key]) db[key] = [];
+        db[key].push(cl);
+      }
     } catch (e) {
       return { ok: false, answers: [], output: '', error: 'Parse error in program: ' + e.message };
     }
