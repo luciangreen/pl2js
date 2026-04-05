@@ -802,8 +802,6 @@
     'pairs_keys([K-_|Ps], [K|Ks]) :- pairs_keys(Ps, Ks).',
     'pairs_values([], []).',
     'pairs_values([_-V|Ps], [V|Vs]) :- pairs_values(Ps, Vs).',
-    '% nth0/3 and nth1/3 with generation mode (var index)',
-    '% (JS native handles the lookup mode; Prolog fallback adds generation)',
   ].join('\n');
 
   // solve(goal, env, db, depth, k)
