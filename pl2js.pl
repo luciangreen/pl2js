@@ -1119,7 +1119,7 @@ function format_1(state, fmt) {
     for (let i = 0; i < f.name.length; i++) {
         if (f.name[i] === "~" && i + 1 < f.name.length) {
             const spec = f.name[i + 1]; i++;
-            if (spec === "n") out += "\\n";
+            if (spec === "n") out += String.fromCharCode(10);
             else if (spec === "~") out += "~";
             else out += "~" + spec;
         } else { out += f.name[i]; }
@@ -1415,7 +1415,7 @@ function exclude_3(state, pred, list, filtered) {
 }
 _registerBuiltin("false", 0, false_0);
 _registerBuiltin("string", 1, string_1);
-_registerBuiltin("\\\\+", 1, naf_1);
+_registerBuiltin("\\\\+", 1, naf_1); /* "\\\\+" in Prolog source = "\\+" in JS = the 2-char key \+ */
 _registerBuiltin("not", 1, naf_1);
 _registerBuiltin("call", 1, call_1);
 _registerBuiltin("call", 2, call_2);

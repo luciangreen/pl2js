@@ -2205,9 +2205,12 @@ test('user clause overrides prelude clause', () => {
       var result = runQuery(function(st) { format_1(st, createAtom("line~n")); return true; }, []);
       return result.output;
     })`, ctx);
-    // In the raw-source extracted header, \\n represents the 2-char string \n
-    // (Prolog escape processing is not applied during test extraction)
-    assert.ok(fn() === 'line\n' || fn() === 'line\\n');
+    assert.strictEqual(fn(), 'line\n');
+  });
+
+  test('generated: not/1 succeeds when goal fails', () => {
+    const fn = vm.runInContext('(function(){ var st = initState(); return naf_1(st, createAtom("fail")) && !st.failed; })', ctx);
+    assert.ok(fn());
   });
 
   group('pl2js.pl generated runtime — list predicates');
