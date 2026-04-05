@@ -1730,6 +1730,204 @@ test('generateHtml: generated page includes form CSS', () => {
 });
 
 // ---------------------------------------------------------------------------
+// New type converters — bidirectional directions and new predicates
+// ---------------------------------------------------------------------------
+group('Type converters — reverse directions');
+
+test('atom_codes/2 reverse: codes → atom', () => {
+  assertBinding(q('', 'atom_codes(X, [104,101,108,108,111]).'), 'X', 'hello');
+});
+
+test('atom_codes/2 forward: atom → codes (existing)', () => {
+  assertBinding(q('', 'atom_codes(hi, X).'), 'X', '[104,105]');
+});
+
+test('atom_codes/2 forward: integer → codes', () => {
+  assertBinding(q('', 'atom_codes(42, X).'), 'X', '[52,50]');
+});
+
+test('char_code/2 reverse: code → char', () => {
+  assertBinding(q('', 'char_code(X, 97).'), 'X', 'a');
+});
+
+test('char_code/2 forward: char → code (existing)', () => {
+  assertBinding(q('', 'char_code(a, X).'), 'X', '97');
+});
+
+test('number_codes/2 reverse: codes → number', () => {
+  assertBinding(q('', 'number_codes(X, [52,50]).'), 'X', '42');
+});
+
+test('number_codes/2 forward: number → codes (existing)', () => {
+  assertBinding(q('', 'number_codes(42, X).'), 'X', '[52,50]');
+});
+
+test('number_chars/2 reverse: chars → number', () => {
+  assertBinding(q('', "number_chars(X, ['4','2'])."), 'X', '42');
+});
+
+test('number_chars/2 forward: number → chars', () => {
+  assertBinding(q('', 'number_chars(42, X).'), 'X', '[4,2]');
+});
+
+test('atom_number/2 reverse: number → atom', () => {
+  assertBinding(q('', 'atom_number(X, 42).'), 'X', '42');
+});
+
+test('atom_number/2 forward: atom → number (existing)', () => {
+  assertBinding(q('', "atom_number('42', N)."), 'N', '42');
+});
+
+test('term_to_atom/2 reverse: parse atom as term', () => {
+  assertBinding(q('', "term_to_atom(X, 'f(1,2)')."), 'X', 'f(1,2)');
+});
+
+test('term_to_atom/2 forward: term → atom (existing)', () => {
+  assertBinding(q('', 'term_to_atom(f(1,2), X).'), 'X', 'f(1,2)');
+});
+
+test('string_to_atom/2 reverse: atom → string', () => {
+  assertBinding(q('', 'string_to_atom(X, hello).'), 'X', 'hello');
+});
+
+test('string_to_atom/2 forward: string → atom', () => {
+  assertBinding(q('', 'string_to_atom(hello, X).'), 'X', 'hello');
+});
+
+group('New type converters');
+
+test('atom_string/2 forward: atom → string', () => {
+  assertBinding(q('', 'atom_string(hello, X).'), 'X', 'hello');
+});
+
+test('atom_string/2 reverse: string → atom', () => {
+  assertBinding(q('', 'atom_string(X, hello).'), 'X', 'hello');
+});
+
+test('atom_string/2 forward: integer → string', () => {
+  assertBinding(q('', 'atom_string(42, X).'), 'X', '42');
+});
+
+test('number_string/2 forward: number → string', () => {
+  assertBinding(q('', 'number_string(42, X).'), 'X', '42');
+});
+
+test('number_string/2 reverse: string → number', () => {
+  assertBinding(q('', "number_string(X, '42')."), 'X', '42');
+});
+
+test('term_string/2 forward: term → string', () => {
+  assertBinding(q('', 'term_string(f(1,2), X).'), 'X', 'f(1,2)');
+});
+
+test('term_string/2 reverse: string → term', () => {
+  assertBinding(q('', "term_string(X, 'f(1,2)')."), 'X', 'f(1,2)');
+});
+
+test('string_codes/2 forward: string → codes', () => {
+  assertBinding(q('', 'string_codes(hi, X).'), 'X', '[104,105]');
+});
+
+test('string_codes/2 reverse: codes → string', () => {
+  assertBinding(q('', 'string_codes(X, [104,105]).'), 'X', 'hi');
+});
+
+test('string_chars/2 forward: string → chars', () => {
+  assertBinding(q('', 'string_chars(hi, X).'), 'X', '[h,i]');
+});
+
+test('string_chars/2 reverse: chars → string', () => {
+  assertBinding(q('', 'string_chars(X, [h,i]).'), 'X', 'hi');
+});
+
+test('atomic_list_concat/2: join list of atoms', () => {
+  assertBinding(q('', 'atomic_list_concat([hello,world], X).'), 'X', 'helloworld');
+});
+
+test('atomic_list_concat/3 forward: join with separator', () => {
+  assertBinding(q('', "atomic_list_concat([a,b,c], '-', X)."), 'X', 'a-b-c');
+});
+
+test('atomic_list_concat/3 reverse: split by separator', () => {
+  assertBinding(q('', "atomic_list_concat(X, '-', 'a-b-c')."), 'X', '[a,b,c]');
+});
+
+test('atomic_list_concat/3: integers in list', () => {
+  assertBinding(q('', "atomic_list_concat([1,2,3], '+', X)."), 'X', '1+2+3');
+});
+
+test('writeq/1: writes term to output', () => {
+  const r = q('', 'writeq(hello).');
+  assert.strictEqual(r.error, null);
+  assert.strictEqual(r.output, 'hello');
+});
+
+group('Built-in rejection');
+
+test('defining a built-in predicate returns an error', () => {
+  const r = q('atom_codes(X, Y) :- true.', 'true.');
+  assert.ok(r.error !== null);
+  assert.ok(r.error.includes('atom_codes/2'));
+});
+
+test('defining atom/1 (type-check built-in) returns an error', () => {
+  const r = q('atom(X) :- true.', 'true.');
+  assert.ok(r.error !== null);
+  assert.ok(r.error.includes('atom/1'));
+});
+
+test('defining is/2 returns an error', () => {
+  const r = q('is(X, Y) :- true.', 'true.');
+  assert.ok(r.error !== null);
+  assert.ok(r.error.includes('is/2'));
+});
+
+test('user predicate with same name but different arity is allowed', () => {
+  // atom_codes/2 is built-in but my_pred/1 is not
+  const r = q('my_pred(X) :- atom(X).', 'my_pred(hello).');
+  assert.strictEqual(r.error, null);
+  assert.ok(r.answers.length > 0);
+});
+
+group('Prelude auto-load');
+
+test('string_lower/2 is available from prelude', () => {
+  assertBinding(q('', 'string_lower(\'HELLO\', X).'), 'X', 'hello');
+});
+
+test('string_upper/2 is available from prelude', () => {
+  assertBinding(q('', 'string_upper(hello, X).'), 'X', 'HELLO');
+});
+
+test('not_member/2 is available from prelude', () => {
+  const r = q('', 'not_member(d, [a,b,c]).');
+  assert.strictEqual(r.error, null);
+  assert.ok(r.answers.length > 0);
+});
+
+test('not_member/2 fails when element is in list', () => {
+  assert.ok(fails('', 'not_member(a, [a,b,c]).'));
+});
+
+test('pairs_keys_values/3 from prelude', () => {
+  assertBinding(q('', 'pairs_keys_values([a-1,b-2], Ks, Vs), Ks = [a,b], Vs = [1,2].'), 'Ks', '[a,b]');
+});
+
+test('pairs_keys/2 from prelude', () => {
+  assertBinding(q('', 'pairs_keys([a-1,b-2], Ks).'), 'Ks', '[a,b]');
+});
+
+test('pairs_values/2 from prelude', () => {
+  assertBinding(q('', 'pairs_values([a-1,b-2], Vs).'), 'Vs', '[1,2]');
+});
+
+test('user clause overrides prelude clause', () => {
+  // User can redefine a prelude predicate
+  const r = q('string_lower(X, X).', "string_lower('HELLO', Y).");
+  assertBinding(r, 'Y', 'HELLO');
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 
 // ---------------------------------------------------------------------------
