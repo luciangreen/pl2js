@@ -2208,7 +2208,7 @@ test('user clause overrides prelude clause', () => {
     assert.strictEqual(fn(), 'line\n');
   });
 
-  test('generated: not/1 succeeds when goal fails', () => {
+  test('generated: not/1 (alias for naf_1) succeeds when goal fails', () => {
     const fn = vm.runInContext('(function(){ var st = initState(); return naf_1(st, createAtom("fail")) && !st.failed; })', ctx);
     assert.ok(fn());
   });

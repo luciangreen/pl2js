@@ -1415,7 +1415,7 @@ function exclude_3(state, pred, list, filtered) {
 }
 _registerBuiltin("false", 0, false_0);
 _registerBuiltin("string", 1, string_1);
-_registerBuiltin("\\\\+", 1, naf_1); /* "\\\\+" in Prolog source = "\\+" in JS = the 2-char key \+ */
+_registerBuiltin("\\\\+", 1, naf_1); /* Prolog \\+ (negation-as-failure) appears as "\\\\+" in string literals due to Prolog atom escaping */
 _registerBuiltin("not", 1, naf_1);
 _registerBuiltin("call", 1, call_1);
 _registerBuiltin("call", 2, call_2);
