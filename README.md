@@ -44,6 +44,10 @@ pl2js/
   index.html         — standalone one-screen browser editor (NEW)
   pl2js.pl           — SWI-Prolog source-to-source compiler module
   README.md          — this file
+  extras/
+    strings.pl       — prelude: string_lower/2, string_upper/2
+    lists.pl         — prelude: not_member/2, max_member/2, min_member/2
+    pairs.pl         — prelude: pairs_keys_values/3, pairs_keys/2, pairs_values/2
   examples/
     family.pl        — family facts and rules
     family.js        — compiled JavaScript output from family.pl
@@ -177,6 +181,92 @@ const html = pl2js.generateHtml(runtimeSource, programSource);
 // auto-runs main/0 on page load, and supports interactive forms via the
 // form predicates described below.
 ```
+
+```javascript
+pl2js.registerFile(path, content);
+// path    : string — file path as used in a :- include(path). directive
+//                    (e.g. 'extras/strings.pl')
+// content : string — Prolog source text of the file
+//
+// Registers a file in the virtual file system so that :- include(path).
+// directives can resolve it.  In Node.js the extras/ directory is loaded
+// automatically; call registerFile() in browser environments before runQuery().
+```
+
+---
+
+## Built-in predicates — `pl2js.js`
+
+`pl2js.js` includes two tiers of built-in predicates.
+
+### Hardcoded built-ins (JS-native, cannot be overridden)
+
+These predicates are implemented directly in JavaScript.  Any attempt by user
+code to define a clause with the same name/arity is rejected with a
+`Permission error`.
+
+| Group | Predicates |
+|---|---|
+| Control flow | `true/0`, `fail/0`, `false/0`, `nl/0`, `!/0`, `,/2`, `;/2`, `->/2`, `\+/1`, `not/1` |
+| Unification / comparison | `=/2`, `\=/2`, `==/2`, `\==/2`, `@</2`, `@>/2`, `@=</2`, `@>=/2`, `compare/3` |
+| Arithmetic | `is/2`, `>/2`, `</2`, `>=/2`, `=</2`, `=:=/2`, `=\=/2` |
+| I/O | `write/1`, `writeln/1`, `writeq/1`, `write_term/2`, `print/1`, `tab/1`, `format/1`, `format/2` |
+| Type checks | `atom/1`, `integer/1`, `number/1`, `float/1`, `var/1`, `nonvar/1`, `compound/1`, `atomic/1`, `callable/1`, `is_list/1`, `ground/1`, `string/1` |
+| Term manipulation | `functor/3`, `arg/3`, `=../2`, `copy_term/2` |
+| Atom / string / char | `atom_length/2`, `atom_concat/3`, `atom_chars/2`, `atom_codes/2`, `atom_number/2`, `atom_string/2`, `number_codes/2`, `number_chars/2`, `number_string/2`, `char_code/2`, `term_to_atom/2`, `term_string/2`, `upcase_atom/2`, `downcase_atom/2`, `string_concat/3`, `string_to_atom/2`, `string_length/2`, `string_codes/2`, `string_chars/2`, `atomic_list_concat/2`, `atomic_list_concat/3`, `char_type/2` |
+| Lists | `length/2`, `last/2`, `nth0/3`, `nth1/3`, `reverse/2`, `sort/2`, `msort/2`, `flatten/2`, `max_list/2`, `min_list/2`, `sum_list/2`, `numlist/3`, `list_to_set/2`, `permutation/2`, `select/3`, `subtract/3`, `intersection/3`, `union/3`, `delete/3` |
+| Findall family | `findall/3`, `aggregate_all/3`, `bagof/3`, `setof/3`, `forall/2` |
+| Control / meta | `once/1`, `ignore/1`, `call/1`–`call/8` |
+| Arithmetic helpers | `succ/2`, `plus/3`, `between/3`, `succ_or_zero/2` |
+| Higher-order | `maplist/2`–`maplist/5`, `include/3`, `exclude/3`, `convlist/3`, `foldl/4`–`foldl/7` |
+| Side-effect / meta | `assert/1`, `asserta/1`, `assertz/1`, `retract/1`, `abolish/1`, `nb_getval/2`, `nb_setval/2`, `b_setval/2`, `b_getval/2`, `read_term/2`, `with_output_to/2`, `predsort/3` |
+| Form / CGI | `read_string/1`, `read_string/2`, `form_argument/2`, `hidden_field/2` |
+
+### Prelude predicates (Prolog-defined, can be overridden)
+
+These predicates are defined in Prolog source files under the `extras/`
+directory.  They are loaded automatically into every query database via
+`:- include(File).` directives (see below), **before** user clauses.
+User code may redefine any of them.
+
+| File | Predicates |
+|---|---|
+| `extras/strings.pl` | `string_lower/2`, `string_upper/2` |
+| `extras/lists.pl` | `not_member/2`, `max_member/2`, `min_member/2` |
+| `extras/pairs.pl` | `pairs_keys_values/3`, `pairs_keys/2`, `pairs_values/2` |
+
+---
+
+## The `:- include(File).` directive
+
+`pl2js.js` supports the standard Prolog directive
+
+```prolog
+:- include('path/to/file.pl').
+```
+
+When this directive appears in a program source (or in the prelude), the
+runtime looks up `'path/to/file.pl'` in an internal **virtual file system**
+and inlines the clauses from that file at the point of the directive.  The
+included source is parsed recursively, so included files may themselves
+contain further `include` directives.
+
+**In Node.js** the `extras/` directory is populated automatically at
+module-load time using `fs.readFileSync`, so the prelude files are always
+available.
+
+**In browser environments** there is no file-system access.  Call
+`pl2js.registerFile(path, content)` before the first `runQuery()` call to
+register any files you want `include` to resolve:
+
+```javascript
+// Register an extra file so :- include('extras/strings.pl'). can resolve it.
+pl2js.registerFile('extras/strings.pl', prologSourceString);
+```
+
+You can also use `:- include(File).` in your own Prolog programs to split
+large programs into multiple logical units, as long as the referenced files
+have been registered first.
 
 ---
 
