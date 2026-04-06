@@ -1204,23 +1204,36 @@
       const p = pathT.name;
       let names;
       if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
-        // Node.js: list real directory
+        // Node.js: recursively list real directory, returning relative paths
         try {
-          const _fs = require('fs');
-          names = _fs.readdirSync(p);
+          const _fs   = require('fs');
+          const _path = require('path');
+          function _readDirRec(dir, base) {
+            const entries = _fs.readdirSync(dir, { withFileTypes: true });
+            const results = [];
+            for (let ei = 0; ei < entries.length; ei++) {
+              const entry   = entries[ei];
+              const relPath = base ? base + '/' + entry.name : entry.name;
+              if (entry.isDirectory()) {
+                const sub = _readDirRec(_path.join(dir, entry.name), relPath);
+                for (let si = 0; si < sub.length; si++) results.push(sub[si]);
+              } else {
+                results.push(relPath);
+              }
+            }
+            return results;
+          }
+          names = _readDirRec(p, '');
         } catch (e) {
           throw new Error('read_folder/2: cannot read folder \'' + p + '\': ' + e.message);
         }
       } else {
-        // Browser: list VFS entries whose path starts with p + '/'
+        // Browser: list all VFS entries whose path starts with p + '/', returning
+        // relative paths (including nested paths such as 'subdir/file.txt').
         const prefix = p.endsWith('/') ? p : p + '/';
         names = Object.keys(_vfs)
           .filter(function (k2) { return k2.indexOf(prefix) === 0; })
-          .map(function (k2) {
-            const rest = k2.slice(prefix.length);
-            return rest.split('/')[0];
-          })
-          .filter(function (n, i, arr) { return arr.indexOf(n) === i; });
+          .map(function (k2) { return k2.slice(prefix.length); });
       }
       const fileList = arrayToList(names.map(mkAtom));
       const e2 = copyEnv(env);
@@ -1250,13 +1263,15 @@
         pairs.push({ name: nameT.name, content: contentT.name });
       }
       if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
-        // Node.js: create directory and write each file
+        // Node.js: create directory and write each file, creating subdirectories as needed
         try {
           const _fs   = require('fs');
           const _path = require('path');
           _fs.mkdirSync(dir, { recursive: true });
           for (let i = 0; i < pairs.length; i++) {
-            _fs.writeFileSync(_path.join(dir, pairs[i].name), pairs[i].content, 'utf8');
+            const filePath = _path.join(dir, pairs[i].name);
+            _fs.mkdirSync(_path.dirname(filePath), { recursive: true });
+            _fs.writeFileSync(filePath, pairs[i].content, 'utf8');
           }
         } catch (e) {
           throw new Error('save_folder/2: cannot save folder \'' + dir + '\': ' + e.message);

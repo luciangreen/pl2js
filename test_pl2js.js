@@ -2556,6 +2556,48 @@ group('File / folder I/O predicates');
     const r = q('', "save_folder('/tmp/nope', [bad_term]).");
     assert.ok(r.error !== null);
   });
+
+  // ---------- nested folder support ----------
+  test('save_folder/2 creates nested subdirectories for nested file names', function () {
+    const dir  = tmpDir();
+    const dest = path.join(dir, 'nested');
+    const prog = 'test :- save_folder(\'' + dest + '\', [file(\'sub/a.txt\', \'aaa\'), file(\'sub/deep/b.txt\', \'bbb\')]).';
+    const r = q(prog, 'test.');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(fs.readFileSync(path.join(dest, 'sub', 'a.txt'), 'utf8'), 'aaa');
+    assert.strictEqual(fs.readFileSync(path.join(dest, 'sub', 'deep', 'b.txt'), 'utf8'), 'bbb');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('read_folder/2 returns nested file paths', function () {
+    const dir = tmpDir();
+    fs.mkdirSync(path.join(dir, 'sub'));
+    fs.mkdirSync(path.join(dir, 'sub', 'deep'));
+    fs.writeFileSync(path.join(dir, 'top.txt'), '', 'utf8');
+    fs.writeFileSync(path.join(dir, 'sub', 'a.txt'), '', 'utf8');
+    fs.writeFileSync(path.join(dir, 'sub', 'deep', 'b.txt'), '', 'utf8');
+    const r = q('', 'read_folder(\'' + dir + '\', Fs).');
+    assert.ok(r.ok, r.error);
+    const list = r.answers[0]['Fs'];
+    assert.ok(list.includes('top.txt'), 'top.txt not found: ' + list);
+    assert.ok(list.includes('sub/a.txt'), 'sub/a.txt not found: ' + list);
+    assert.ok(list.includes('sub/deep/b.txt'), 'sub/deep/b.txt not found: ' + list);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('save_folder/2 and read_folder/2 round-trip with nested files', function () {
+    const dir  = tmpDir();
+    const dest = path.join(dir, 'roundtrip');
+    const prog = [
+      'test :-',
+      '  save_folder(\'' + dest + '\', [file(\'dir/x.txt\', \'xcontent\')]),',
+      '  read_folder(\'' + dest + '\', Fs),',
+      '  member(\'dir/x.txt\', Fs).',
+    ].join('\n');
+    const r = q('member(X,[X|_]). member(X,[_|T]) :- member(X,T).\n' + prog, 'test.');
+    assert.ok(r.ok, r.error);
+    fs.rmSync(dir, { recursive: true });
+  });
 }());
 
 
