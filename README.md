@@ -252,12 +252,15 @@ Writes `Content` (an atom) to the file at `Path` (an atom).
 
 #### `read_folder(+Path, -Files)`
 
-Unifies `Files` with a list of filename atoms found inside the directory at
-`Path`.
+Unifies `Files` with a list of relative file path atoms found inside the
+directory at `Path`.  Subdirectories are traversed recursively, so nested
+files are returned as paths like `'subdir/file.txt'`.
 
-- **Node.js**: lists the directory with `fs.readdirSync`.
+- **Node.js**: walks the directory tree recursively using `fs.readdirSync`
+  with `withFileTypes: true`.
 - **Browser**: collects VFS keys whose path starts with `Path + '/'` and
-  returns the immediate children (first path segment after the prefix).
+  returns each key's relative path (including nested paths such as
+  `'subdir/file.txt'`).
 
 ```prolog
 :- read_folder('src', Files), maplist(writeln, Files).
@@ -267,16 +270,19 @@ Unifies `Files` with a list of filename atoms found inside the directory at
 
 Creates the directory `Path` and writes a set of files into it.  `FileList`
 must be a proper Prolog list of `file(Name, Content)` terms, where both `Name`
-and `Content` are atoms.
+and `Content` are atoms.  `Name` may contain path separators to place files in
+nested subdirectories (e.g. `'subdir/file.txt'`).
 
-- **Node.js**: creates the directory (with `fs.mkdirSync` using
-  `{recursive: true}`) and writes each named file using `fs.writeFileSync`.
+- **Node.js**: creates the directory (and any required subdirectories) using
+  `fs.mkdirSync` with `{recursive: true}`, and writes each named file using
+  `fs.writeFileSync`.
 - **Browser**: builds a ZIP archive (stored, no compression) containing all
-  the files under a top-level folder named after `Path`, then triggers a
-  browser download of the archive named `<Path>.zip`.
+  the files under a top-level folder named after `Path`, preserving any nested
+  paths, then triggers a browser download of the archive named `<Path>.zip`.
 
 ```prolog
 Files = [file('main.pl', ':- writeln(hello).'),
+         file('lib/utils.pl', ':- writeln(utils).'),
          file('readme.txt', 'Example project')],
 save_folder('myproject', Files).
 ```
