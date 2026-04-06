@@ -1209,14 +1209,14 @@
           const _fs   = require('fs');
           const _path = require('path');
           function _readDirRec(dir, base) {
-            var entries = _fs.readdirSync(dir, { withFileTypes: true });
-            var results = [];
-            for (var ei = 0; ei < entries.length; ei++) {
-              var entry   = entries[ei];
-              var relPath = base ? base + '/' + entry.name : entry.name;
+            const entries = _fs.readdirSync(dir, { withFileTypes: true });
+            const results = [];
+            for (let ei = 0; ei < entries.length; ei++) {
+              const entry   = entries[ei];
+              const relPath = base ? base + '/' + entry.name : entry.name;
               if (entry.isDirectory()) {
-                var sub = _readDirRec(_path.join(dir, entry.name), relPath);
-                for (var si = 0; si < sub.length; si++) results.push(sub[si]);
+                const sub = _readDirRec(_path.join(dir, entry.name), relPath);
+                for (let si = 0; si < sub.length; si++) results.push(sub[si]);
               } else {
                 results.push(relPath);
               }
