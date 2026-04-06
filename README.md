@@ -221,6 +221,65 @@ code to define a clause with the same name/arity is rejected with a
 | Higher-order | `maplist/2`–`maplist/5`, `include/3`, `exclude/3`, `convlist/3`, `foldl/4`–`foldl/7` |
 | Side-effect / meta | `assert/1`, `asserta/1`, `assertz/1`, `retract/1`, `abolish/1`, `nb_getval/2`, `nb_setval/2`, `b_setval/2`, `b_getval/2`, `read_term/2`, `with_output_to/2`, `predsort/3` |
 | Form / CGI | `read_string/1`, `read_string/2`, `form_argument/2`, `hidden_field/2` |
+| File / folder I/O | `read_file/2`, `save_file/2`, `read_folder/2`, `save_folder/2` |
+
+### File / folder I/O predicates
+
+#### `read_file(+Path, -Content)`
+
+Reads the file at `Path` (an atom) and unifies `Content` with its text content
+as an atom.
+
+- **Node.js**: reads directly from the real filesystem using `fs.readFileSync`.
+- **Browser**: looks the path up in the internal virtual file system (populated
+  via `pl2js.registerFile/2`).  Throws if the path is not registered.
+
+```prolog
+:- read_file('data/input.txt', Content), writeln(Content).
+```
+
+#### `save_file(+Path, +Content)`
+
+Writes `Content` (an atom) to the file at `Path` (an atom).
+
+- **Node.js**: writes to the real filesystem using `fs.writeFileSync`.
+- **Browser**: triggers a browser download of the content as a text file named
+  after the last path component.
+
+```prolog
+:- save_file('output/result.txt', 'Hello, world!').
+```
+
+#### `read_folder(+Path, -Files)`
+
+Unifies `Files` with a list of filename atoms found inside the directory at
+`Path`.
+
+- **Node.js**: lists the directory with `fs.readdirSync`.
+- **Browser**: collects VFS keys whose path starts with `Path + '/'` and
+  returns the immediate children (first path segment after the prefix).
+
+```prolog
+:- read_folder('src', Files), maplist(writeln, Files).
+```
+
+#### `save_folder(+Path, +FileList)`
+
+Creates the directory `Path` and writes a set of files into it.  `FileList`
+must be a proper Prolog list of `file(Name, Content)` terms, where both `Name`
+and `Content` are atoms.
+
+- **Node.js**: creates the directory (with `fs.mkdirSync` using
+  `{recursive: true}`) and writes each named file using `fs.writeFileSync`.
+- **Browser**: builds a ZIP archive (stored, no compression) containing all
+  the files under a top-level folder named after `Path`, then triggers a
+  browser download of the archive named `<Path>.zip`.
+
+```prolog
+Files = [file('main.pl', ':- writeln(hello).'),
+         file('readme.txt', 'Example project')],
+save_folder('myproject', Files).
+```
 
 ### Prelude predicates (Prolog-defined, can be overridden)
 
