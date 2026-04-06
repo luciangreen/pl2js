@@ -828,6 +828,8 @@
     'read_term/2', 'with_output_to/2', 'predsort/3',
     // Form / CGI
     'read_string/1', 'read_string/2', 'form_argument/2', 'hidden_field/2',
+    // File / folder I/O
+    'read_file/2', 'save_file/2', 'read_folder/2', 'save_folder/2',
   ]);
 
   // Prolog source loaded into every query database before user clauses.
@@ -847,6 +849,93 @@
   //   Calls k(env_solution) for each solution.
   //   Throws {cut:true} when cut fires (caught at clause-iteration level).
   //   Throws {stop:true} when the answer limit is reached (caught at top level).
+
+  // Builds a ZIP blob (store, no compression) from an array of {name, content} pairs.
+  // Used by save_folder/2 in browser environments.
+  function _buildZipBlob(folderName, pairs) {
+    function strToBytes(s) {
+      var buf = [];
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        if (c < 128) {
+          buf.push(c);
+        } else if (c < 2048) {
+          buf.push((c >> 6) | 192, (c & 63) | 128);
+        } else {
+          buf.push((c >> 12) | 224, ((c >> 6) & 63) | 128, (c & 63) | 128);
+        }
+      }
+      return new Uint8Array(buf);
+    }
+    function uint16LE(n) { return [n & 0xff, (n >> 8) & 0xff]; }
+    function uint32LE(n) { return [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >> 24) & 0xff]; }
+    function crc32(bytes) {
+      var table = [];
+      for (var i = 0; i < 256; i++) {
+        var c = i;
+        for (var j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        table[i] = c;
+      }
+      var crc = 0xFFFFFFFF;
+      for (var k = 0; k < bytes.length; k++) crc = table[(crc ^ bytes[k]) & 0xff] ^ (crc >>> 8);
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    }
+    var locals = [];
+    var central = [];
+    var offset = 0;
+    var prefix = folderName.endsWith('/') ? folderName : folderName + '/';
+    for (var i = 0; i < pairs.length; i++) {
+      var entryName = prefix + pairs[i].name;
+      var nameBytes = strToBytes(entryName);
+      var dataBytes = strToBytes(pairs[i].content);
+      var crc       = crc32(dataBytes);
+      var local = [].concat(
+        [0x50, 0x4B, 0x03, 0x04],  // signature
+        uint16LE(20),               // version needed
+        uint16LE(0),                // flags
+        uint16LE(0),                // compression: store
+        uint16LE(0), uint16LE(0),   // mod time, mod date
+        uint32LE(crc),
+        uint32LE(dataBytes.length),
+        uint32LE(dataBytes.length),
+        uint16LE(nameBytes.length),
+        uint16LE(0)                 // extra length
+      );
+      for (var j = 0; j < nameBytes.length; j++) local.push(nameBytes[j]);
+      for (var j = 0; j < dataBytes.length; j++) local.push(dataBytes[j]);
+      var cent = [].concat(
+        [0x50, 0x4B, 0x01, 0x02],  // central dir signature
+        uint16LE(20), uint16LE(20),
+        uint16LE(0), uint16LE(0),
+        uint16LE(0), uint16LE(0),
+        uint32LE(crc),
+        uint32LE(dataBytes.length),
+        uint32LE(dataBytes.length),
+        uint16LE(nameBytes.length),
+        uint16LE(0), uint16LE(0),
+        uint16LE(0), uint16LE(0),
+        uint32LE(0),
+        uint32LE(offset)
+      );
+      for (var j = 0; j < nameBytes.length; j++) cent.push(nameBytes[j]);
+      locals.push(local);
+      central.push(cent);
+      offset += local.length;
+    }
+    var centralBytes = [].concat.apply([], central);
+    var eocd = [].concat(
+      [0x50, 0x4B, 0x05, 0x06],
+      uint16LE(0), uint16LE(0),
+      uint16LE(pairs.length), uint16LE(pairs.length),
+      uint32LE(centralBytes.length),
+      uint32LE(offset),
+      uint16LE(0)
+    );
+    var all = [].concat.apply([], locals).concat(centralBytes).concat(eocd);
+    return new Blob([new Uint8Array(all)], { type: 'application/zip' });
+  }
+
+
 
   const MAX_DEPTH   = 500;  // guard against infinite recursion
   let   _output     = '';   // captured write/nl output
@@ -1050,7 +1139,151 @@
       return;
     }
 
-    // ---- Type checks ----
+    // ---- File / folder I/O ----
+    if (f === 'read_file' && a === 2) {
+      const pathT = deref(env, goal.args[0]);
+      if (pathT.type !== 'atom') throw new Error('read_file/2: Path must be an atom');
+      const p = pathT.name;
+      let content;
+      if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
+        // Node.js: read from real filesystem
+        try {
+          const _fs = require('fs');
+          content = _fs.readFileSync(p, 'utf8');
+        } catch (e) {
+          throw new Error('read_file/2: cannot read file \'' + p + '\': ' + e.message);
+        }
+      } else if (_vfs[p] !== undefined) {
+        // Browser: fall back to virtual file system
+        content = _vfs[p];
+      } else {
+        throw new Error('read_file/2: file not found: \'' + p + '\'');
+      }
+      const e2 = copyEnv(env);
+      if (unify(e2, goal.args[1], mkAtom(content))) k(e2);
+      return;
+    }
+
+    if (f === 'save_file' && a === 2) {
+      const pathT    = deref(env, goal.args[0]);
+      const contentT = deref(env, goal.args[1]);
+      if (pathT.type !== 'atom')    throw new Error('save_file/2: Path must be an atom');
+      if (contentT.type !== 'atom') throw new Error('save_file/2: Content must be an atom');
+      const p = pathT.name;
+      const c = contentT.name;
+      if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
+        // Node.js: write to real filesystem
+        try {
+          const _fs = require('fs');
+          _fs.writeFileSync(p, c, 'utf8');
+        } catch (e) {
+          throw new Error('save_file/2: cannot write file \'' + p + '\': ' + e.message);
+        }
+      } else if (typeof Blob !== 'undefined' && typeof document !== 'undefined') {
+        // Browser: trigger a download
+        const blob = new Blob([c], { type: 'text/plain' });
+        const url  = URL.createObjectURL(blob);
+        const a2   = document.createElement('a');
+        a2.href     = url;
+        a2.download = p.split('/').pop() || p;
+        document.body.appendChild(a2);
+        a2.click();
+        document.body.removeChild(a2);
+        URL.revokeObjectURL(url);
+      } else {
+        // Fallback: store in VFS so the content is retrievable in tests
+        _vfs[p] = c;
+      }
+      k(env);
+      return;
+    }
+
+    if (f === 'read_folder' && a === 2) {
+      const pathT = deref(env, goal.args[0]);
+      if (pathT.type !== 'atom') throw new Error('read_folder/2: Path must be an atom');
+      const p = pathT.name;
+      let names;
+      if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
+        // Node.js: list real directory
+        try {
+          const _fs = require('fs');
+          names = _fs.readdirSync(p);
+        } catch (e) {
+          throw new Error('read_folder/2: cannot read folder \'' + p + '\': ' + e.message);
+        }
+      } else {
+        // Browser: list VFS entries whose path starts with p + '/'
+        const prefix = p.endsWith('/') ? p : p + '/';
+        names = Object.keys(_vfs)
+          .filter(function (k2) { return k2.indexOf(prefix) === 0; })
+          .map(function (k2) {
+            const rest = k2.slice(prefix.length);
+            return rest.split('/')[0];
+          })
+          .filter(function (n, i, arr) { return arr.indexOf(n) === i; });
+      }
+      const fileList = arrayToList(names.map(mkAtom));
+      const e2 = copyEnv(env);
+      if (unify(e2, goal.args[1], fileList)) k(e2);
+      return;
+    }
+
+    if (f === 'save_folder' && a === 2) {
+      // save_folder(+Path, +FileList)
+      // FileList is a list of file(Name, Content) compound terms.
+      const pathT    = deref(env, goal.args[0]);
+      const filesArg = deref(env, goal.args[1]);
+      if (pathT.type !== 'atom') throw new Error('save_folder/2: Path must be an atom');
+      const dir   = pathT.name;
+      const files = listToArray(filesArg, env);
+      if (!files) throw new Error('save_folder/2: FileList must be a proper list');
+      // Build an array of {name, content} pairs
+      const pairs = [];
+      for (let i = 0; i < files.length; i++) {
+        const ft = deref(env, files[i]);
+        if (ft.type !== 'compound' || ft.functor !== 'file' || ft.arity !== 2)
+          throw new Error('save_folder/2: each element must be file(Name, Content)');
+        const nameT    = deref(env, ft.args[0]);
+        const contentT = deref(env, ft.args[1]);
+        if (nameT.type !== 'atom')    throw new Error('save_folder/2: file Name must be an atom');
+        if (contentT.type !== 'atom') throw new Error('save_folder/2: file Content must be an atom');
+        pairs.push({ name: nameT.name, content: contentT.name });
+      }
+      if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
+        // Node.js: create directory and write each file
+        try {
+          const _fs   = require('fs');
+          const _path = require('path');
+          _fs.mkdirSync(dir, { recursive: true });
+          for (let i = 0; i < pairs.length; i++) {
+            _fs.writeFileSync(_path.join(dir, pairs[i].name), pairs[i].content, 'utf8');
+          }
+        } catch (e) {
+          throw new Error('save_folder/2: cannot save folder \'' + dir + '\': ' + e.message);
+        }
+      } else if (typeof Blob !== 'undefined' && typeof document !== 'undefined') {
+        // Browser: build a ZIP archive (store, no compression) and download it
+        const zipBlob = _buildZipBlob(dir, pairs);
+        const url  = URL.createObjectURL(zipBlob);
+        const a2   = document.createElement('a');
+        a2.href     = url;
+        a2.download = (dir.split('/').pop() || dir) + '.zip';
+        document.body.appendChild(a2);
+        a2.click();
+        document.body.removeChild(a2);
+        URL.revokeObjectURL(url);
+      } else {
+        // Fallback: store each file in VFS
+        const prefix = dir.endsWith('/') ? dir : dir + '/';
+        for (let i = 0; i < pairs.length; i++) {
+          _vfs[prefix + pairs[i].name] = pairs[i].content;
+        }
+      }
+      k(env);
+      return;
+    }
+
+
     if (f === 'atom' && a === 1) {
       const t = deref(env, goal.args[0]);
       if (t.type === 'atom' || t.type === 'nil') k(env);

@@ -2420,6 +2420,145 @@ test('user clause overrides prelude clause', () => {
 // Summary
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// File / folder I/O predicates
+// ---------------------------------------------------------------------------
+
+group('File / folder I/O predicates');
+
+(function () {
+  const os   = require('os');
+  const path = require('path');
+  const fs   = require('fs');
+
+  // Helper: create a fresh temp directory for each test group
+  function tmpDir() {
+    return fs.mkdtempSync(path.join(os.tmpdir(), 'pl2js-test-'));
+  }
+
+  // ---------- read_file/2 ----------
+  test('read_file/2 reads an existing file into an atom', function () {
+    const dir  = tmpDir();
+    const file = path.join(dir, 'hello.txt');
+    fs.writeFileSync(file, 'hello world', 'utf8');
+    const r = q('', 'read_file(\'' + file + '\', X).');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(r.answers[0]['X'], 'hello world');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('read_file/2 throws for a non-existent file', function () {
+    const r = q('', "read_file('/no/such/file.txt', _X).");
+    assert.ok(r.error !== null);
+    assert.ok(/read_file/.test(r.error), r.error);
+  });
+
+  test('read_file/2 throws when Path is not an atom', function () {
+    const r = q('', 'read_file(42, _X).');
+    assert.ok(r.error !== null);
+  });
+
+  // ---------- save_file/2 ----------
+  test('save_file/2 writes content to a file', function () {
+    const dir  = tmpDir();
+    const file = path.join(dir, 'out.txt');
+    const r = q('', 'save_file(\'' + file + '\', \'saved content\').');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), 'saved content');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('save_file/2 round-trips with read_file/2', function () {
+    const dir  = tmpDir();
+    const file = path.join(dir, 'round.txt');
+    const prog = 'test :- save_file(\'' + file + '\', \'round trip\'), read_file(\'' + file + '\', X), write(X).';
+    const r = q(prog, 'test.');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(r.output, 'round trip');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('save_file/2 throws when Path is not an atom', function () {
+    const r = q('', 'save_file(123, hello).');
+    assert.ok(r.error !== null);
+  });
+
+  test('save_file/2 throws when Content is not an atom', function () {
+    const r = q('', "save_file('out.txt', 42).");
+    assert.ok(r.error !== null);
+  });
+
+  // ---------- read_folder/2 ----------
+  test('read_folder/2 lists files in a directory', function () {
+    const dir = tmpDir();
+    fs.writeFileSync(path.join(dir, 'a.pl'), '', 'utf8');
+    fs.writeFileSync(path.join(dir, 'b.pl'), '', 'utf8');
+    const r = q('', 'read_folder(\'' + dir + '\', Fs).');
+    assert.ok(r.ok, r.error);
+    const list = r.answers[0]['Fs'];
+    assert.ok(list.includes('a.pl'), 'a.pl not found: ' + list);
+    assert.ok(list.includes('b.pl'), 'b.pl not found: ' + list);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('read_folder/2 returns an empty list for an empty directory', function () {
+    const dir = tmpDir();
+    const r = q('', 'read_folder(\'' + dir + '\', Fs).');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(r.answers[0]['Fs'], '[]');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('read_folder/2 throws for a non-existent directory', function () {
+    const r = q('', "read_folder('/no/such/folder', _Fs).");
+    assert.ok(r.error !== null);
+    assert.ok(/read_folder/.test(r.error), r.error);
+  });
+
+  test('read_folder/2 throws when Path is not an atom', function () {
+    const r = q('', 'read_folder(42, _Fs).');
+    assert.ok(r.error !== null);
+  });
+
+  // ---------- save_folder/2 ----------
+  test('save_folder/2 creates directory and writes files', function () {
+    const dir  = tmpDir();
+    const dest = path.join(dir, 'myfolder');
+    const prog = 'test :- save_folder(\'' + dest + '\', [file(\'a.txt\', \'aaa\'), file(\'b.txt\', \'bbb\')]).';
+    const r = q(prog, 'test.');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(fs.readFileSync(path.join(dest, 'a.txt'), 'utf8'), 'aaa');
+    assert.strictEqual(fs.readFileSync(path.join(dest, 'b.txt'), 'utf8'), 'bbb');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('save_folder/2 round-trips with read_folder/2 and read_file/2', function () {
+    const dir  = tmpDir();
+    const dest = path.join(dir, 'rtrip');
+    const prog = [
+      'test :-',
+      '  save_folder(\'' + dest + '\', [file(\'x.txt\', \'xcontent\')]),',
+      '  read_folder(\'' + dest + '\', Fs),',
+      '  member(\'x.txt\', Fs).',
+    ].join('\n');
+    const r = q('member(X,[X|_]). member(X,[_|T]) :- member(X,T).\n' + prog, 'test.');
+    assert.ok(r.ok, r.error);
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('save_folder/2 throws when Path is not an atom', function () {
+    const r = q('', 'save_folder(42, []).');
+    assert.ok(r.error !== null);
+  });
+
+  test('save_folder/2 throws when a list element is not file(Name, Content)', function () {
+    const r = q('', "save_folder('/tmp/nope', [bad_term]).");
+    assert.ok(r.error !== null);
+  });
+}());
+
+
 console.log('\n' + '─'.repeat(50));
 console.log('Results: ' + _passed + ' passed, ' + _failed + ' failed');
 if (_failed > 0) {
