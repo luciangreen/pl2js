@@ -447,7 +447,7 @@ sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
         rm.title = 'Remove ' + name;
         rm.addEventListener('click', function () {
           delete window._loadedQueryFiles[name];
-          pl2js.loadFile(name, undefined);  // unregister (undefined will be ignored by read_file)
+          pl2js.loadFile(name, undefined);  // remove from browser file store
           renderFilesList();
         });
         li.appendChild(span);
