@@ -805,6 +805,7 @@
     'read_string/1', 'read_string/2', 'form_argument/2', 'hidden_field/2',
     // File / folder I/O
     'read_file/2', 'save_file/2', 'read_folder/2', 'save_folder/2',
+    'list_loaded_files/1',
     // Dynamic loading
     'consult/1',
   ]);
@@ -1172,9 +1173,12 @@
       const p = pathT.name;
       const c = contentT.name;
       if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
-        // Node.js: write to real filesystem
+        // Node.js: create parent directories if needed, then write to real filesystem
         try {
-          const _fs = require('fs');
+          const _fs   = require('fs');
+          const _path = require('path');
+          const _dir  = _path.dirname(p);
+          if (_dir && _dir !== '.') _fs.mkdirSync(_dir, { recursive: true });
           _fs.writeFileSync(p, c, 'utf8');
         } catch (e) {
           throw new Error('save_file/2: cannot write file \'' + p + '\': ' + e.message);
@@ -1300,6 +1304,15 @@
       return;
     }
 
+    if (f === 'list_loaded_files' && a === 1) {
+      // list_loaded_files(?Files) — unifies Files with a list of atom paths for
+      // every file currently in the browser file store (_browserFiles).
+      const names = Object.keys(_browserFiles);
+      const fileList = arrayToList(names.map(mkAtom));
+      const e2 = copyEnv(env);
+      if (unify(e2, goal.args[0], fileList)) k(e2);
+      return;
+    }
 
     if (f === 'atom' && a === 1) {
       const t = deref(env, goal.args[0]);
@@ -3122,7 +3135,17 @@ safeRuntime + '\n' +
      * @param {string} path    — file path (e.g. 'input.txt')
      * @param {string} content — text content of the file
      */
-    registerFile: function (path, content) { _browserFiles[path] = content; }
+    registerFile: function (path, content) { _browserFiles[path] = content; },
+
+    /**
+     * Return an array of all file paths currently in the browser file store.
+     * Mirrors the Prolog predicate list_loaded_files/1.
+     *
+     * @returns {string[]} sorted array of file path strings
+     */
+    listLoadedFiles: function () {
+      return Object.keys(_browserFiles).sort();
+    }
   };
 
   if (typeof module !== 'undefined' && module.exports) {
