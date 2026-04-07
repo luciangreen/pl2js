@@ -185,7 +185,44 @@
     }
     #unsaved-dot.visible { display: inline-block; }
 
-    /* ---- Footer ---- */
+    /* ---- Loaded files panel ---- */
+    .files-panel {
+      font-size: 0.82rem;
+      color: #555;
+    }
+    .files-list {
+      list-style: none;
+      margin-top: 6px;
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    .files-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 3px 0;
+      border-bottom: 1px solid #f0f0f0;
+      gap: 6px;
+    }
+    .files-list li:last-child { border-bottom: none; }
+    .files-list .fname {
+      font-family: "SF Mono", "Fira Code", Menlo, monospace;
+      font-size: 0.8rem;
+      color: #333;
+      word-break: break-all;
+    }
+    .files-list .rm-btn {
+      background: none;
+      border: none;
+      color: #c00;
+      cursor: pointer;
+      padding: 0 4px;
+      font-size: 0.8rem;
+      min-width: 18px;
+    }
+    .files-list .rm-btn:hover { color: #f00; }
+    .no-files-note { color: #aaa; font-style: italic; margin-top: 4px; }
+
     footer {
       text-align: center;
       font-size: 0.75rem;
@@ -248,6 +285,26 @@ sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
     <div class="status-bar">
       <span id="unsaved-dot"></span>
       <span id="status-text">Ready.</span>
+    </div>
+  </div>
+
+  <!-- Loaded files (for read_file / read_folder) -->
+  <div class="card">
+    <div class="card-label">Files for read_file / read_folder</div>
+    <div class="files-panel">
+      <p>Load files here to make them available to <code>read_file/2</code> and
+         <code>read_folder/2</code> in your Prolog program.
+         Use <code>read_file('name.pl', Src), consult(Src)</code> to load and run
+         a file, or <code>assertz(fact)</code> to add individual facts.</p>
+      <div class="btn-row" style="margin-top:8px;">
+        <input type="file" id="queryFileInput" multiple style="display:none">
+        <input type="file" id="queryFolderInput" webkitdirectory multiple style="display:none">
+        <button class="secondary" id="btnLoadFile">&#128462; Load File(s)</button>
+        <button class="secondary" id="btnLoadFolder">&#128193; Load Folder</button>
+        <button class="secondary" id="btnClearFiles">&#10005; Clear All</button>
+      </div>
+      <ul class="files-list" id="filesList"></ul>
+      <p class="no-files-note" id="noFilesNote">No files loaded.</p>
     </div>
   </div>
 
@@ -362,6 +419,96 @@ sibling(X, Y) :- parent(Z, X), parent(Z, Y), X \= Y.
     reader.readAsText(file);
     fileInput.value = ''; // reset so same file can be reloaded
   });
+
+  // ---- Query file store (for read_file/2 and read_folder/2) ----
+  const queryFileInput   = document.getElementById('queryFileInput');
+  const queryFolderInput = document.getElementById('queryFolderInput');
+  const btnLoadFile      = document.getElementById('btnLoadFile');
+  const btnLoadFolder    = document.getElementById('btnLoadFolder');
+  const btnClearFiles    = document.getElementById('btnClearFiles');
+  const filesList        = document.getElementById('filesList');
+  const noFilesNote      = document.getElementById('noFilesNote');
+
+  function renderFilesList() {
+    filesList.innerHTML = '';
+    const names = Object.keys(window._loadedQueryFiles || {});
+    if (names.length === 0) {
+      noFilesNote.style.display = '';
+    } else {
+      noFilesNote.style.display = 'none';
+      names.forEach(function (name) {
+        const li = document.createElement('li');
+        const span = document.createElement('span');
+        span.className = 'fname';
+        span.textContent = name;
+        const rm = document.createElement('button');
+        rm.className = 'rm-btn';
+        rm.textContent = '✕';
+        rm.title = 'Remove ' + name;
+        rm.addEventListener('click', function () {
+          delete window._loadedQueryFiles[name];
+          pl2js.loadFile(name, undefined);  // unregister (undefined will be ignored by read_file)
+          renderFilesList();
+        });
+        li.appendChild(span);
+        li.appendChild(rm);
+        filesList.appendChild(li);
+      });
+    }
+  }
+
+  function registerQueryFile(name, content) {
+    if (!window._loadedQueryFiles) window._loadedQueryFiles = {};
+    window._loadedQueryFiles[name] = content;
+    pl2js.loadFile(name, content);
+    renderFilesList();
+  }
+
+  function readFileList(files, baseDir) {
+    // Read all files asynchronously via Promises
+    const promises = [];
+    for (let i = 0; i < files.length; i++) {
+      (function (file) {
+        promises.push(new Promise(function (resolve) {
+          const reader = new FileReader();
+          reader.onload = function (evt) {
+            // Use webkitRelativePath when loading a folder, otherwise just the name
+            const name = baseDir ? file.webkitRelativePath || (baseDir + '/' + file.name)
+                                 : file.name;
+            resolve({ name: name, content: evt.target.result });
+          };
+          reader.readAsText(file);
+        }));
+      })(files[i]);
+    }
+    Promise.all(promises).then(function (results) {
+      results.forEach(function (r) { registerQueryFile(r.name, r.content); });
+      statusText.textContent = 'Loaded ' + results.length + ' file(s) for read_file/read_folder.';
+    });
+  }
+
+  btnLoadFile.addEventListener('click', function () { queryFileInput.click(); });
+  btnLoadFolder.addEventListener('click', function () { queryFolderInput.click(); });
+
+  queryFileInput.addEventListener('change', function () {
+    if (!queryFileInput.files.length) return;
+    readFileList(queryFileInput.files, null);
+    queryFileInput.value = '';
+  });
+
+  queryFolderInput.addEventListener('change', function () {
+    if (!queryFolderInput.files.length) return;
+    readFileList(queryFolderInput.files, null);
+    queryFolderInput.value = '';
+  });
+
+  btnClearFiles.addEventListener('click', function () {
+    window._loadedQueryFiles = {};
+    renderFilesList();
+    statusText.textContent = 'All query files cleared.';
+  });
+
+  renderFilesList();
 
   // ---- Save file ----
   btnSave.addEventListener('click', function () {

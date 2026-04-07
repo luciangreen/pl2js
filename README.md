@@ -183,14 +183,22 @@ const html = pl2js.generateHtml(runtimeSource, programSource);
 ```
 
 ```javascript
-pl2js.registerFile(path, content);
-// path    : string — file path as used in a :- include(path). directive
-//                    (e.g. 'extras/strings.pl')
-// content : string — Prolog source text of the file
+pl2js.loadFile(path, content);
+// path    : string — file path as it will appear in read_file/2
+//                    (e.g. 'mydata/input.txt' or just 'input.txt')
+// content : string — text content of the file
+//           pass null or undefined to remove a previously loaded file
 //
-// Registers a file in the virtual file system so that :- include(path).
-// directives can resolve it.  In Node.js the extras/ directory is loaded
-// automatically; call registerFile() in browser environments before runQuery().
+// Loads a file into the browser file store so that read_file/2 and
+// read_folder/2 can access it.  In a browser use the Load File / Load Folder
+// buttons in index.html, or call loadFile() programmatically.
+// In Node.js, read_file/2 reads real filesystem paths first and falls back
+// to files loaded via loadFile() when the path does not exist on disk.
+```
+
+```javascript
+pl2js.registerFile(path, content);
+// Deprecated alias for pl2js.loadFile().  Kept for backwards compatibility.
 ```
 
 ---
@@ -222,6 +230,7 @@ code to define a clause with the same name/arity is rejected with a
 | Side-effect / meta | `assert/1`, `asserta/1`, `assertz/1`, `retract/1`, `abolish/1`, `nb_getval/2`, `nb_setval/2`, `b_setval/2`, `b_getval/2`, `read_term/2`, `with_output_to/2`, `predsort/3` |
 | Form / CGI | `read_string/1`, `read_string/2`, `form_argument/2`, `hidden_field/2` |
 | File / folder I/O | `read_file/2`, `save_file/2`, `read_folder/2`, `save_folder/2` |
+| Dynamic loading | `consult/1` |
 
 ### File / folder I/O predicates
 
@@ -231,11 +240,22 @@ Reads the file at `Path` (an atom) and unifies `Content` with its text content
 as an atom.
 
 - **Node.js**: reads directly from the real filesystem using `fs.readFileSync`.
-- **Browser**: looks the path up in the internal virtual file system (populated
-  via `pl2js.registerFile/2`).  Throws if the path is not registered.
+  If the path does not exist on disk, falls back to files loaded via
+  `pl2js.loadFile()`.
+- **Browser**: looks the path up in the browser file store (populated via
+  `pl2js.loadFile()` or the **Load File(s)** / **Load Folder** buttons in
+  `index.html`).  Throws an informative error if the file is not found — the
+  old virtual-file-system approach is no longer used.
+
+> **Browser workflow:**
+> 1. Click **Load File(s)** or **Load Folder** in the *Files for read_file /
+>    read_folder* panel before running a query.
+> 2. Call `read_file('filename.pl', Content)` in your query — the file you
+>    loaded will be accessible by its name (or relative path for folders).
 
 ```prolog
-:- read_file('data/input.txt', Content), writeln(Content).
+% After loading 'data.txt' via the dialogue box:
+:- read_file('data.txt', Content), writeln(Content).
 ```
 
 #### `save_file(+Path, +Content)`
@@ -257,12 +277,15 @@ directory at `Path`.  Subdirectories are traversed recursively, so nested
 files are returned as paths like `'subdir/file.txt'`.
 
 - **Node.js**: walks the directory tree recursively using `fs.readdirSync`
-  with `withFileTypes: true`.
-- **Browser**: collects VFS keys whose path starts with `Path + '/'` and
-  returns each key's relative path (including nested paths such as
-  `'subdir/file.txt'`).
+  with `withFileTypes: true`.  Falls back to the browser file store for paths
+  that do not exist on disk.
+- **Browser**: looks up all files in the browser file store whose path starts
+  with `Path + '/'`, returning each file's relative path (including nested
+  paths such as `'subdir/file.txt'`).  Use the **Load Folder** button in the
+  UI to populate the store from a real folder on your device.
 
 ```prolog
+% After loading a folder 'src/' via the Load Folder dialogue:
 :- read_folder('src', Files), maplist(writeln, Files).
 ```
 
@@ -287,51 +310,107 @@ Files = [file('main.pl', ':- writeln(hello).'),
 save_folder('myproject', Files).
 ```
 
+#### `consult(+Source)`
+
+Parses the Prolog source text in the atom `Source` and adds all resulting
+clauses to the current query's database, making them immediately available to
+subsequent goals in the same query.
+
+This is the recommended way to dynamically load Prolog code — either from a
+file read with `read_file/2`, or written inline with escaped quotes.
+
+```prolog
+% Load a library file that was selected via the Load File dialogue:
+:- read_file('mylib.pl', Src), consult(Src).
+
+% Add facts inline (escaped single quotes inside the atom):
+:- consult('color(red). color(blue). color(green).').
+
+% Use assertz/1 to add a single fact:
+:- assertz(color(yellow)).
+```
+
+**Notes:**
+- `consult/1` cannot redefine JS-native built-in predicates.
+- Directives (`:- ...`) inside the consulted source are silently ignored.
+- Clauses added by `consult/1` persist for the duration of the current
+  `runQuery()` call but are not carried over to the next call.
+
 ### Prelude predicates (Prolog-defined, can be overridden)
 
-These predicates are defined in Prolog source files under the `extras/`
-directory.  They are loaded automatically into every query database via
-`:- include(File).` directives (see below), **before** user clauses.
+These predicates are defined inline in the pl2js runtime and are loaded
+automatically into every query database **before** user clauses.
 User code may redefine any of them.
 
-| File | Predicates |
+| Source file | Predicates |
 |---|---|
 | `extras/strings.pl` | `string_lower/2`, `string_upper/2` |
 | `extras/lists.pl` | `not_member/2`, `max_member/2`, `min_member/2` |
 | `extras/pairs.pl` | `pairs_keys_values/3`, `pairs_keys/2`, `pairs_values/2` |
 
+> **Note:** The prelude is now embedded directly in the runtime and no longer
+> requires loading files from the `extras/` directory.  The source files in
+> `extras/` are kept as readable references only.
+
 ---
 
-## The `:- include(File).` directive
+## Loading files manually (replacing `:- include`)
 
-`pl2js.js` supports the standard Prolog directive
+The `:- include(File).` directive is **not supported** in `pl2js.js`.
+Directives in user programs are silently ignored.  Use `read_file/2` +
+`consult/1` instead:
+
+### In the browser
+
+1. Click **Load File(s)** in the *Files for read_file / read_folder* panel
+   (above the query box in `index.html`) and select the file(s) you want to
+   make available.
+2. In your Prolog program or query, call `read_file/2` to read the content,
+   then `consult/1` to load its clauses:
 
 ```prolog
-:- include('path/to/file.pl').
+% Load a helper library selected via the Load File dialogue:
+:- read_file('helper.pl', Src), consult(Src).
+
+% The predicates from helper.pl are now available.
+main :- my_helper_pred(X), writeln(X).
 ```
 
-When this directive appears in a program source (or in the prelude), the
-runtime looks up `'path/to/file.pl'` in an internal **virtual file system**
-and inlines the clauses from that file at the point of the directive.  The
-included source is parsed recursively, so included files may themselves
-contain further `include` directives.
+You can also write Prolog source inline using `consult/1` with an escaped
+atom:
 
-**In Node.js** the `extras/` directory is populated automatically at
-module-load time using `fs.readFileSync`, so the prelude files are always
-available.
+```prolog
+:- consult('color(red). color(blue). color(green).').
+main :- findall(C, color(C), Cs), writeln(Cs).
+```
 
-**In browser environments** there is no file-system access.  Call
-`pl2js.registerFile(path, content)` before the first `runQuery()` call to
-register any files you want `include` to resolve:
+Or use `assertz/1` to add individual facts:
+
+```prolog
+:- assertz(color(red)), assertz(color(blue)).
+main :- findall(C, color(C), Cs), writeln(Cs).
+```
+
+### In Node.js
+
+Pass a real file path to `read_file/2` (or use `pl2js.loadFile()` to
+pre-register content without disk access):
+
+```prolog
+main :-
+    read_file('extras/my_lib.pl', Src),
+    consult(Src),
+    my_predicate(X),
+    writeln(X).
+```
+
+### JavaScript API
 
 ```javascript
-// Register an extra file so :- include('extras/strings.pl'). can resolve it.
-pl2js.registerFile('extras/strings.pl', prologSourceString);
+// Pre-register a file's content so read_file/2 can access it
+// (useful in tests or when you have the content as a string):
+pl2js.loadFile('mylib.pl', prologSourceString);
 ```
-
-You can also use `:- include(File).` in your own Prolog programs to split
-large programs into multiple logical units, as long as the referenced files
-have been registered first.
 
 ---
 
@@ -367,8 +446,12 @@ have been registered first.
 | `read_string/1`, `read_string/2` | ✅ |
 | `form_argument/2` | ✅ |
 | `hidden_field/2` | ✅ |
+| `assert/1`, `assertz/1`, `asserta/1`, `retract/1`, `abolish/1` (dynamic predicates) | ✅ |
+| `consult/1` (load Prolog source from an atom) | ✅ |
+| `read_file/2` — browser: dialogue-box file store | ✅ |
+| `read_folder/2` — browser: dialogue-box folder store | ✅ |
 | Floats | ❌ (treated as integers) |
-| `assert/retract` (dynamic predicates) | ❌ |
+| `:- include(File).` directive | ❌ (removed; use `read_file/2` + `consult/1`) |
 | Exceptions `throw/1`, `catch/3` | ❌ |
 | Operator declarations `op/3` | ❌ |
 | DCG `-->` | ❌ |
@@ -379,10 +462,13 @@ have been registered first.
 ### Known limitations
 
 - **Floats** are parsed but converted to integers (`3.14` becomes `3`).
-- **assert/retract** are silently ignored (dynamic databases not supported).
+- **Dynamic clauses** added via `assertz/1`, `asserta/1`, or `consult/1`
+  persist only for the duration of the current `runQuery()` call.
 - **Exceptions** (`throw/catch`) are not supported.
 - **Recursion depth** is limited to 500 to prevent browser hangs.
 - **ISO compliance** is not a goal; many edge cases differ from standard Prolog.
+- **`:- include(File).`** directives in user programs are silently ignored;
+  use `read_file/2` + `consult/1` instead.
 
 ---
 
