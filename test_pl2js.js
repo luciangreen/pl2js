@@ -2720,6 +2720,48 @@ test('consult/1 fails when argument is not an atom', function () {
   assert.ok(r.error !== null);
 });
 
+test('consult/1 loads a file directly by filename atom (standard Prolog behaviour)', function () {
+  const os   = require('os');
+  const path = require('path');
+  const fs   = require('fs');
+  const dir  = fs.mkdtempSync(path.join(os.tmpdir(), 'pl2js-consult-'));
+  const file = path.join(dir, 'mylib.pl');
+  fs.writeFileSync(file, 'color(red). color(blue). color(green).', 'utf8');
+  try {
+    const prog = 'test :- consult(\'' + file + '\'), findall(C, color(C), Cs), write(Cs).';
+    const r = q(prog, 'test.');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(r.output, '[red,blue,green]');
+  } finally {
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
+test('consult/1 loads a file via loadFile by filename atom (browser-like context)', function () {
+  pl2js.loadFile('__pl2js_test_colors.pl', 'color(red). color(blue).');
+  const prog = "test :- consult('__pl2js_test_colors.pl'), findall(C, color(C), Cs), write(Cs).";
+  const r = q(prog, 'test.');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.output, '[red,blue]');
+});
+
+test('consult/1 with Src from read_file loads my_length/2 predicate', function () {
+  const os   = require('os');
+  const path = require('path');
+  const fs   = require('fs');
+  const dir  = fs.mkdtempSync(path.join(os.tmpdir(), 'pl2js-consult-'));
+  const file = path.join(dir, 'lists.pl');
+  fs.writeFileSync(file, 'my_length([], 0).\nmy_length([_|T], N) :- my_length(T, N1), N is N1 + 1.\n', 'utf8');
+  try {
+    const prog = 'main :- read_file(\'' + file + '\', Src), consult(Src), my_length([1,2,3], A), writeln(A).';
+    const r = q(prog, 'main.');
+    assert.ok(r.ok, r.error);
+    assert.ok(r.output.trim() === '3', 'expected 3, got: ' + r.output);
+  } finally {
+    fs.rmSync(dir, { recursive: true });
+  }
+});
+
 
 console.log('\n' + '─'.repeat(50));
 console.log('Results: ' + _passed + ' passed, ' + _failed + ' failed');

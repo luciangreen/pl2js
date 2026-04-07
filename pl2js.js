@@ -2079,13 +2079,31 @@
       return;
     }
 
-    // ---- consult/1 — parse a Prolog source atom and add its clauses to db ----
+    // ---- consult/1 — load a Prolog file or parse a source atom ----
     if (f === 'consult' && a === 1) {
       const srcT = deref(env, goal.args[0]);
       if (srcT.type !== 'atom') {
-        throw new Error('consult/1: argument must be an atom containing Prolog source text');
+        throw new Error('consult/1: argument must be an atom containing Prolog source text or a file path');
       }
-      const consultClauses = parsePrologSource(srcT.name);
+      // Try to load as a file first (standard Prolog behaviour: consult(File)).
+      // Fall back to treating the atom value as inline Prolog source text.
+      let src = srcT.name;
+      const filePath = src;
+      if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
+        // Node.js: try real filesystem, then browser file store.
+        try {
+          src = require('fs').readFileSync(filePath, 'utf8');
+        } catch (_e) {
+          if (_browserFiles[filePath] !== undefined) {
+            src = _browserFiles[filePath];
+          }
+          // else: src stays as-is — treat as inline source text
+        }
+      } else if (_browserFiles[filePath] !== undefined) {
+        // Browser: check the browser file store.
+        src = _browserFiles[filePath];
+      }
+      const consultClauses = parsePrologSource(src);
       for (let ci = 0; ci < consultClauses.length; ci++) {
         const cl = consultClauses[ci];
         const consultKey = predicateKey(cl.head);
