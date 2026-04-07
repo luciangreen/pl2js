@@ -468,7 +468,7 @@
   };
 
   // Parse a full Prolog source string into an array of {head, body} clauses.
-  // Handles :- include(File). directives by inlining the registered file's clauses.
+  // Directives (:- ...) are silently ignored.
   function parsePrologSource(src) {
     const toks = tokenize(src);
     const parser = new Parser(toks);
@@ -478,19 +478,8 @@
         const cl = parser.parseClause();
         if (!cl) continue;
         if (cl._directive) {
-          // Handle :- include(File). — inline clauses from the registered file
-          const d = cl._directive;
-          if (d.type === 'compound' && d.functor === 'include' && d.arity === 1) {
-            const fileArg = d.args[0];
-            if (fileArg.type === 'atom' && _vfs[fileArg.name]) {
-              const included = parsePrologSource(_vfs[fileArg.name]);
-              for (let i = 0; i < included.length; i++) clauses.push(included[i]);
-            } else if (fileArg.type === 'atom') {
-              // eslint-disable-next-line no-console
-              console.warn('[pl2js] include: file not registered in virtual FS: ' + fileArg.name);
-            }
-          }
-          // All other directives are silently ignored
+          // All directives are silently ignored in user programs.
+          // Use consult/1 or assertz/1 to load Prolog source at runtime.
           continue;
         }
         clauses.push(cl);
@@ -746,32 +735,18 @@
   // SECTION 9: Built-in registry, prelude, and goal execution
   // =========================================================================
 
-  // Virtual file system used by :- include(File). directives.
-  // Keys are file paths (e.g. 'extras/strings.pl'); values are source strings.
-  // In Node.js the extras/ directory is loaded automatically.
-  // In browser environments call pl2js.registerFile(path, content) before
-  // the first runQuery() call to make extra files available to include.
+  // Fallback file system used by save_file/2 and save_folder/2 in environments
+  // where neither Node.js fs nor the browser Blob/download APIs are available
+  // (e.g. Node.js environments without __dirname, or test harnesses).
+  // Keys are file paths; values are source strings.
   const _vfs = Object.create(null);
 
-  // Auto-load extras/ in Node.js (requires fs module and __dirname).
-  if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
-    (function () {
-      try {
-        const _fs   = require('fs');
-        const _path = require('path');
-        const _extrasFiles = ['extras/strings.pl', 'extras/lists.pl', 'extras/pairs.pl'];
-        _extrasFiles.forEach(function (f) {
-          const full = _path.join(__dirname, f);
-          if (_fs.existsSync(full)) {
-            _vfs[f] = _fs.readFileSync(full, 'utf8');
-          } else {
-            // eslint-disable-next-line no-console
-            console.warn('[pl2js] prelude file not found: ' + full);
-          }
-        });
-      } catch (e) { /* fs not available — browser or restricted environment */ }
-    }());
-  }
+  // Browser file store — populated by pl2js.loadFile(name, content).
+  // read_file/2 and read_folder/2 in browser environments look here for files
+  // that the user has loaded via the dialogue-box (Load File / Load Folder)
+  // before running a query.  Use the Load File and Load Folder buttons in
+  // index.html (or call pl2js.loadFile() programmatically) to register files.
+  const _browserFiles = Object.create(null);
 
   // Set of 'name/arity' keys for every predicate implemented natively in JS.
   // buildDatabase rejects user clauses whose key appears here.
@@ -830,19 +805,35 @@
     'read_string/1', 'read_string/2', 'form_argument/2', 'hidden_field/2',
     // File / folder I/O
     'read_file/2', 'save_file/2', 'read_folder/2', 'save_folder/2',
+    // Dynamic loading
+    'consult/1',
   ]);
 
   // Prolog source loaded into every query database before user clauses.
-  // Each :- include(File). directive is resolved against the virtual file
-  // system (_vfs) populated above.  The predicate implementations live in
-  // extras/*.pl — this string is the single place that lists which files
-  // are part of the prelude; the predicates themselves are NOT duplicated
-  // here.  Only the JS-native predicates in _BUILTIN_KEYS are permanently
+  // The prelude predicates are defined inline here (previously they were loaded
+  // via :- include(File). directives from the extras/ directory, but that
+  // mechanism has been replaced with this inline approach so the prelude works
+  // reliably in both Node.js and browser environments without requiring file
+  // access).  Only the JS-native predicates in _BUILTIN_KEYS are permanently
   // protected; prelude predicates can be overridden by user code.
   const _PRELUDE_SOURCE = [
-    ":- include('extras/strings.pl').",
-    ":- include('extras/lists.pl').",
-    ":- include('extras/pairs.pl').",
+    '% extras/strings.pl — string convenience predicates',
+    'string_lower(X, Y) :- downcase_atom(X, Y).',
+    'string_upper(X, Y) :- upcase_atom(X, Y).',
+    '% extras/lists.pl — extra list predicates',
+    'not_member(_, []).',
+    'not_member(X, [H|T]) :- X \\= H, not_member(X, T).',
+    'max_member(Max, [Max]).',
+    'max_member(Max, [H|T]) :- max_member(TMax, T), (H @>= TMax -> Max = H ; Max = TMax).',
+    'min_member(Min, [Min]).',
+    'min_member(Min, [H|T]) :- min_member(TMin, T), (H @=< TMin -> Min = H ; Min = TMin).',
+    '% extras/pairs.pl — Key-Value pair predicates',
+    'pairs_keys_values([], [], []).',
+    'pairs_keys_values([K-V|Ps], [K|Ks], [V|Vs]) :- pairs_keys_values(Ps, Ks, Vs).',
+    'pairs_keys([], []).',
+    'pairs_keys([K-_|Ps], [K|Ks]) :- pairs_keys(Ps, Ks).',
+    'pairs_values([], []).',
+    'pairs_values([_-V|Ps], [V|Vs]) :- pairs_values(Ps, Vs).',
   ].join('\n');
 
   // solve(goal, env, db, depth, k)
@@ -1146,18 +1137,27 @@
       const p = pathT.name;
       let content;
       if (typeof require !== 'undefined' && typeof __dirname !== 'undefined') {
-        // Node.js: read from real filesystem
+        // Node.js: try real filesystem first, then fall back to browser file store
+        // (the browser file store is populated by pl2js.loadFile() and is useful
+        // for testing or for programs that use loadFile() rather than disk paths).
         try {
           const _fs = require('fs');
           content = _fs.readFileSync(p, 'utf8');
         } catch (e) {
-          throw new Error('read_file/2: cannot read file \'' + p + '\': ' + e.message);
+          if (_browserFiles[p] !== undefined) {
+            content = _browserFiles[p];
+          } else {
+            throw new Error('read_file/2: cannot read file \'' + p + '\': ' + e.message);
+          }
         }
-      } else if (_vfs[p] !== undefined) {
-        // Browser: fall back to virtual file system
-        content = _vfs[p];
+      } else if (_browserFiles[p] !== undefined) {
+        // Browser: read from the browser file store (populated via pl2js.loadFile()
+        // or the Load File / Load Folder buttons in the UI).
+        content = _browserFiles[p];
       } else {
-        throw new Error('read_file/2: file not found: \'' + p + '\'');
+        throw new Error('read_file/2: file not found: \'' + p + '\'. ' +
+          'In a browser, use the Load File button (or pl2js.loadFile()) to ' +
+          'make files available before calling read_file/2.');
       }
       const e2 = copyEnv(env);
       if (unify(e2, goal.args[1], mkAtom(content))) k(e2);
@@ -1228,10 +1228,12 @@
           throw new Error('read_folder/2: cannot read folder \'' + p + '\': ' + e.message);
         }
       } else {
-        // Browser: list all VFS entries whose path starts with p + '/', returning
-        // relative paths (including nested paths such as 'subdir/file.txt').
+        // Browser: list all files in the browser file store whose path starts
+        // with p + '/', returning relative paths (including nested paths such
+        // as 'subdir/file.txt').  Files are loaded via pl2js.loadFile() or
+        // the Load File / Load Folder buttons in the UI.
         const prefix = p.endsWith('/') ? p : p + '/';
-        names = Object.keys(_vfs)
+        names = Object.keys(_browserFiles)
           .filter(function (k2) { return k2.indexOf(prefix) === 0; })
           .map(function (k2) { return k2.slice(prefix.length); });
       }
@@ -1991,9 +1993,109 @@
       return;
     }
 
-    // ---- assert / retract (no-ops with warning) ----
-    if (['assert', 'assertz', 'asserta', 'retract', 'abolish'].includes(f)) {
-      // Dynamic predicates not supported — silently fail
+    // ---- assert / retract / abolish ----
+    if (f === 'assertz' || f === 'asserta' || f === 'assert') {
+      if (a !== 1) { k(env); return; }
+      const ct = applyEnv(env, deref(env, goal.args[0]));
+      let head, body;
+      if (ct.type === 'compound' && ct.functor === ':-' && ct.arity === 2) {
+        head = ct.args[0];
+        body = ct.args[1];
+      } else {
+        head = ct;
+        body = null;
+      }
+      const assertKey = predicateKey(head);
+      if (_BUILTIN_KEYS.has(assertKey)) {
+        throw new Error(f + '/1: cannot assert over built-in predicate ' + assertKey);
+      }
+      if (!db[assertKey]) db[assertKey] = [];
+      if (f === 'asserta') {
+        db[assertKey].unshift({ head: head, body: body });
+      } else {
+        db[assertKey].push({ head: head, body: body });
+      }
+      k(env);
+      return;
+    }
+
+    if (f === 'retract' && a === 1) {
+      const ct = deref(env, goal.args[0]);
+      let headP, bodyP;
+      if (ct.type === 'compound' && ct.functor === ':-' && ct.arity === 2) {
+        headP = ct.args[0];
+        bodyP = ct.args[1];
+      } else {
+        headP = ct;
+        bodyP = null;
+      }
+      const headD = deref(env, headP);
+      const retractKey = (headD.type === 'atom'     ? headD.name + '/0' :
+                          headD.type === 'compound' ? headD.functor + '/' + headD.arity : null);
+      if (!retractKey) return; // fail
+      const retractClauses = db[retractKey];
+      if (!retractClauses) return; // fail
+      // Non-deterministic: try each clause; permanently remove it before yielding.
+      let ri = 0;
+      while (ri < retractClauses.length) {
+        const fresh = renameClause(retractClauses[ri]);
+        const e2 = copyEnv(env);
+        let matches = unify(e2, headP, fresh.head);
+        if (matches && bodyP !== null) {
+          const freshBody = fresh.body || mkAtom('true');
+          matches = unify(e2, bodyP, freshBody);
+        }
+        if (matches) {
+          retractClauses.splice(ri, 1); // permanently remove (not undone on backtrack)
+          try {
+            k(e2);
+          } catch (e) {
+            if (e.cut) return;
+            throw e;
+          }
+          // ri stays the same — the former ri+1 is now at ri
+        } else {
+          ri++;
+        }
+      }
+      return;
+    }
+
+    if (f === 'abolish' && a === 1) {
+      const ct = deref(env, goal.args[0]);
+      // Standard: abolish(Name/Arity)
+      if (ct.type === 'compound' && ct.functor === '/' && ct.arity === 2) {
+        const nameT  = deref(env, ct.args[0]);
+        const arityT = deref(env, ct.args[1]);
+        if (nameT.type === 'atom' && arityT.type === 'int') {
+          const abolishKey = nameT.name + '/' + arityT.val;
+          if (_BUILTIN_KEYS.has(abolishKey)) {
+            throw new Error('abolish/1: cannot abolish built-in predicate ' + abolishKey);
+          }
+          delete db[abolishKey];
+        }
+      }
+      k(env);
+      return;
+    }
+
+    // ---- consult/1 — parse a Prolog source atom and add its clauses to db ----
+    if (f === 'consult' && a === 1) {
+      const srcT = deref(env, goal.args[0]);
+      if (srcT.type !== 'atom') {
+        throw new Error('consult/1: argument must be an atom containing Prolog source text');
+      }
+      const consultClauses = parsePrologSource(srcT.name);
+      for (let ci = 0; ci < consultClauses.length; ci++) {
+        const cl = consultClauses[ci];
+        const consultKey = predicateKey(cl.head);
+        if (_BUILTIN_KEYS.has(consultKey)) {
+          throw new Error('consult/1: cannot redefine built-in predicate ' + consultKey);
+        }
+        if (!db[consultKey]) db[consultKey] = [];
+        db[consultKey].push(cl);
+      }
+      k(env);
       return;
     }
 
@@ -2975,16 +3077,34 @@ safeRuntime + '\n' +
     /** Render a term to a display string (no environment). */
     termToString: function (term) { return _termStr({}, term); },
     /**
-     * Register a file in the virtual file system so that
-     * :- include(Path). directives can resolve it.
-     * Call this before runQuery() in browser environments where the
-     * extras/ directory is not loaded automatically.
+     * Load a file into the browser file store so that read_file/2 and
+     * read_folder/2 can access it during query execution.
      *
-     * @param {string} path    — file path as used in the include directive
-     *                           (e.g. 'extras/strings.pl')
-     * @param {string} content — Prolog source text of the file
+     * Call this (or use the Load File / Load Folder buttons in index.html)
+     * before runQuery() whenever your Prolog program calls read_file/2 or
+     * read_folder/2 in a browser environment.
+     *
+     * @param {string} path    — file path as it will appear in read_file/2
+     *                           (e.g. 'mydata/input.txt' or just 'input.txt')
+     * @param {string} content — text content of the file
      */
-    registerFile: function (path, content) { _vfs[path] = content; }
+    loadFile: function (path, content) {
+      if (content === undefined || content === null) {
+        delete _browserFiles[path];
+      } else {
+        _browserFiles[path] = content;
+      }
+    },
+
+    /**
+     * @deprecated Use pl2js.loadFile() instead.
+     * Kept for backwards compatibility — now populates the browser file store
+     * (same as loadFile) rather than the old internal virtual file system.
+     *
+     * @param {string} path    — file path (e.g. 'input.txt')
+     * @param {string} content — text content of the file
+     */
+    registerFile: function (path, content) { _browserFiles[path] = content; }
   };
 
   if (typeof module !== 'undefined' && module.exports) {

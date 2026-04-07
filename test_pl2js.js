@@ -2600,6 +2600,126 @@ group('File / folder I/O predicates');
   });
 }());
 
+// =========================================================================
+// Dynamic predicates: assertz/1, asserta/1, retract/1, abolish/1
+// =========================================================================
+group('assertz/1, asserta/1, retract/1, abolish/1');
+
+test('assertz/1 adds a fact to the database', function () {
+  const r = q('', 'assertz(color(red)), color(X).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['X'], 'red');
+});
+
+test('assertz/1 appends clauses in order', function () {
+  const r = q('', 'assertz(num(1)), assertz(num(2)), assertz(num(3)), findall(X, num(X), Xs).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['Xs'], '[1,2,3]');
+});
+
+test('asserta/1 prepends a clause', function () {
+  const r = q('', 'assertz(num(2)), asserta(num(1)), findall(X, num(X), Xs).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['Xs'], '[1,2]');
+});
+
+test('assertz/1 adds a rule', function () {
+  const prog = 'even(0). even(N) :- N > 0, N1 is N - 2, even(N1).';
+  const r = q(prog, 'assertz((double_even(X) :- even(X), X > 0)), double_even(4).');
+  assert.ok(r.ok, r.error);
+});
+
+test('retract/1 removes the first matching fact', function () {
+  const r = q('', 'assertz(item(a)), assertz(item(b)), retract(item(a)), findall(X, item(X), Xs).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['Xs'], '[b]');
+});
+
+test('retract/1 fails when no matching clause', function () {
+  const r = q('', 'retract(no_such_pred(x)).');
+  // Ground query: ok=true by pl2js convention even on Prolog failure;
+  // check answers.length === 0 to detect Prolog failure.
+  assert.strictEqual(r.answers.length, 0);
+  assert.strictEqual(r.error, null);
+});
+
+test('retract/1 is non-deterministic via backtracking', function () {
+  const r = q('', 'assertz(val(1)), assertz(val(2)), assertz(val(3)), findall(X, retract(val(X)), Xs).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['Xs'], '[1,2,3]');
+});
+
+test('abolish/1 removes all clauses for a predicate', function () {
+  const r = q('', 'assertz(thing(a)), assertz(thing(b)), abolish(thing/2).');
+  // abolish(thing/2) targets arity 2 — thing/1 clauses survive
+  assert.ok(r.ok, r.error);
+  const r2 = q('', 'assertz(thing(a)), abolish(thing/1), thing(_X).');
+  // Ground query: ok=true by pl2js convention; answers.length === 0 means Prolog failure
+  assert.strictEqual(r2.answers.length, 0);
+  assert.strictEqual(r2.error, null);
+});
+
+test('assert/retract cannot redefine built-ins', function () {
+  const r = q('', 'assertz(true).');
+  assert.ok(!r.ok);
+  assert.ok(r.error !== null);
+});
+
+// =========================================================================
+// consult/1
+// =========================================================================
+group('consult/1');
+
+test('consult/1 loads facts from a source atom', function () {
+  const src = 'animal(cat). animal(dog). animal(bird).';
+  const r = q('', 'consult(\'' + src + '\'), findall(X, animal(X), Xs).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['Xs'], '[cat,dog,bird]');
+});
+
+test('consult/1 loads rules from a source atom', function () {
+  const src = 'double(X, Y) :- Y is X * 2.';
+  const r = q('', 'consult(\'' + src + '\'), double(5, Y).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['Y'], '10');
+});
+
+test('consult/1 integrates with read_file/2 in Node.js', function () {
+  const os   = require('os');
+  const path = require('path');
+  const fs   = require('fs');
+  const dir  = fs.mkdtempSync(path.join(os.tmpdir(), 'pl2js-consult-'));
+  const file = path.join(dir, 'lib.pl');
+  fs.writeFileSync(file, 'greeting(hello). greeting(hi).', 'utf8');
+  const prog = 'test :- read_file(\'' + file + '\', Src), consult(Src), findall(G, greeting(G), Gs), write(Gs).';
+  const r = q(prog, 'test.');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.output, '[hello,hi]');
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('consult/1 integrates with loadFile in browser-like context', function () {
+  // loadFile populates the browser file store; read_file/2 falls back to it
+  // in Node.js when the path doesn't exist on disk.
+  pl2js.loadFile('__pl2js_test_mylib.pl', 'shape(circle). shape(square).');
+  const prog = "test :- read_file('__pl2js_test_mylib.pl', Src), consult(Src), findall(S, shape(S), Ss), write(Ss).";
+  const r = q(prog, 'test.');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.output, '[circle,square]');
+});
+
+test('consult/1 rejects source that redefines a built-in', function () {
+  const r = q('', "consult('true :- fail.').");
+  assert.ok(!r.ok);
+  assert.ok(r.error !== null);
+});
+
+test('consult/1 fails when argument is not an atom', function () {
+  const r = q('', 'consult(42).');
+  assert.ok(!r.ok);
+  assert.ok(r.error !== null);
+});
+
 
 console.log('\n' + '─'.repeat(50));
 console.log('Results: ' + _passed + ' passed, ' + _failed + ' failed');
