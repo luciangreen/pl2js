@@ -2489,6 +2489,25 @@ group('File / folder I/O predicates');
     assert.ok(r.error !== null);
   });
 
+  test('save_file/2 creates nested parent directories automatically', function () {
+    const dir  = tmpDir();
+    const file = path.join(dir, 'sub', 'deep', 'out.txt');
+    const r = q('', 'save_file(\'' + file + '\', \'nested content\').');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), 'nested content');
+    fs.rmSync(dir, { recursive: true });
+  });
+
+  test('save_file/2 nested path round-trips with read_file/2', function () {
+    const dir  = tmpDir();
+    const file = path.join(dir, 'a', 'b', 'c.txt');
+    const prog = 'test :- save_file(\'' + file + '\', \'deep\'), read_file(\'' + file + '\', X), write(X).';
+    const r = q(prog, 'test.');
+    assert.ok(r.ok, r.error);
+    assert.strictEqual(r.output, 'deep');
+    fs.rmSync(dir, { recursive: true });
+  });
+
   // ---------- read_folder/2 ----------
   test('read_folder/2 lists files in a directory', function () {
     const dir = tmpDir();
@@ -2597,6 +2616,55 @@ group('File / folder I/O predicates');
     const r = q('member(X,[X|_]). member(X,[_|T]) :- member(X,T).\n' + prog, 'test.');
     assert.ok(r.ok, r.error);
     fs.rmSync(dir, { recursive: true });
+  });
+
+  // ---------- list_loaded_files/1 ----------
+  test('list_loaded_files/1 succeeds and returns a list', function () {
+    // Verify the predicate succeeds and unifies with a list (other tests may
+    // have files in the store; we only assert the call itself works).
+    const r = q('', 'list_loaded_files(Fs), is_list(Fs).');
+    assert.ok(r.ok, r.error);
+  });
+
+  test('list_loaded_files/1 includes a file after loadFile()', function () {
+    pl2js.loadFile('__pl2js_test_llf_a.txt', 'alpha');
+    pl2js.loadFile('__pl2js_test_llf_b.txt', 'beta');
+    const r = q('', 'list_loaded_files(Fs).');
+    assert.ok(r.ok, r.error);
+    const list = r.answers[0]['Fs'];
+    assert.ok(list.includes('__pl2js_test_llf_a.txt'), 'a.txt not in: ' + list);
+    assert.ok(list.includes('__pl2js_test_llf_b.txt'), 'b.txt not in: ' + list);
+    pl2js.loadFile('__pl2js_test_llf_a.txt', undefined);
+    pl2js.loadFile('__pl2js_test_llf_b.txt', undefined);
+  });
+
+  test('list_loaded_files/1 includes nested-path files', function () {
+    pl2js.loadFile('dir/sub/file.txt', 'nested content');
+    const r = q('', 'list_loaded_files(Fs).');
+    assert.ok(r.ok, r.error);
+    const list = r.answers[0]['Fs'];
+    assert.ok(list.includes('dir/sub/file.txt'), 'nested path not in: ' + list);
+    pl2js.loadFile('dir/sub/file.txt', undefined);
+  });
+
+  test('list_loaded_files/1 reflects removals', function () {
+    pl2js.loadFile('__pl2js_test_llf_rm.txt', 'temp');
+    pl2js.loadFile('__pl2js_test_llf_rm.txt', undefined);  // remove
+    const r = q('', 'list_loaded_files(Fs).');
+    assert.ok(r.ok, r.error);
+    const list = r.answers[0]['Fs'];
+    assert.ok(!list.includes('__pl2js_test_llf_rm.txt'), 'removed file still in: ' + list);
+  });
+
+  test('pl2js.listLoadedFiles() JS API returns array of loaded paths', function () {
+    pl2js.loadFile('__pl2js_test_api_x.txt', 'x');
+    pl2js.loadFile('__pl2js_test_api_y.txt', 'y');
+    const files = pl2js.listLoadedFiles();
+    assert.ok(Array.isArray(files), 'expected array');
+    assert.ok(files.includes('__pl2js_test_api_x.txt'), 'x not in: ' + files);
+    assert.ok(files.includes('__pl2js_test_api_y.txt'), 'y not in: ' + files);
+    pl2js.loadFile('__pl2js_test_api_x.txt', undefined);
+    pl2js.loadFile('__pl2js_test_api_y.txt', undefined);
   });
 }());
 
