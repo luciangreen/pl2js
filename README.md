@@ -238,6 +238,7 @@ code to define a clause with the same name/arity is rejected with a
 | Form / CGI | `read_string/1`, `read_string/2`, `form_argument/2`, `hidden_field/2` |
 | File / folder I/O | `read_file/2`, `save_file/2`, `read_folder/2`, `save_folder/2` |
 | Dynamic loading | `consult/1` |
+| Memory | `memory_usage/1`, `set_memory_limit/1`, `get_memory_limit/1` |
 
 ### File / folder I/O predicates
 
@@ -362,6 +363,58 @@ file read with `read_file/2`, or written inline with escaped quotes.
 - Directives (`:- ...`) inside the consulted source are silently ignored.
 - Clauses added by `consult/1` persist for the duration of the current
   `runQuery()` call but are not carried over to the next call.
+
+### Memory predicates
+
+#### `memory_usage(-Bytes)`
+
+Unifies `Bytes` with the current JavaScript heap memory usage as a
+non-negative integer (bytes).
+
+- **Node.js**: uses `process.memoryUsage().heapUsed`.
+- **Browser**: uses `performance.memory.usedJSHeapSize` when available
+  (Chromium-based browsers); returns `0` in other browsers where the API is
+  not exposed.
+
+The predicate succeeds when `Bytes` is unbound (the common case) or when it
+is already bound to a value equal to the current usage; it fails if the bound
+value does not match.
+
+```prolog
+% Capture current heap usage:
+:- memory_usage(M), format("Heap used: ~w bytes~n", [M]).
+```
+
+#### `set_memory_limit(+Bytes)`
+
+Sets a soft memory limit of `Bytes` bytes for the current query.  After each
+call step, if `memory_usage/1` would return a value greater than `Bytes`, the
+engine throws an error and the query is aborted.
+
+- `Bytes` must be a non-negative integer.  Pass `0` to disable the limit.
+- The limit is checked at the start of every `solve/5` call, so it may
+  slightly overshoot before being detected.
+- The limit applies only within the current `runQuery()` invocation; it does
+  not persist across separate calls.
+
+```prolog
+% Limit queries to 256 MB:
+:- set_memory_limit(268435456).
+
+% Remove the limit:
+:- set_memory_limit(0).
+```
+
+#### `get_memory_limit(-Bytes)`
+
+Unifies `Bytes` with the currently active memory limit (an integer ≥ 0).
+A value of `0` means no limit is in effect.
+
+```prolog
+:- set_memory_limit(1073741824),
+   get_memory_limit(L),
+   format("Limit: ~w bytes~n", [L]).
+```
 
 ### Prelude predicates (Prolog-defined, can be overridden)
 
