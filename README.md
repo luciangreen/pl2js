@@ -201,6 +201,13 @@ pl2js.registerFile(path, content);
 // Deprecated alias for pl2js.loadFile().  Kept for backwards compatibility.
 ```
 
+```javascript
+const paths = pl2js.listLoadedFiles();
+// Returns a sorted string[] of every file path currently in the browser file
+// store — i.e. every path registered with pl2js.loadFile() that has not since
+// been removed.  Mirrors the Prolog predicate list_loaded_files/1.
+```
+
 ---
 
 ## Built-in predicates — `pl2js.js`
@@ -308,6 +315,26 @@ Files = [file('main.pl', ':- writeln(hello).'),
          file('lib/utils.pl', ':- writeln(utils).'),
          file('readme.txt', 'Example project')],
 save_folder('myproject', Files).
+```
+
+#### `list_loaded_files(?Files)`
+
+Unifies `Files` with a list of atom paths for every file currently in the
+browser file store (i.e. every file registered with `pl2js.loadFile()` or the
+**Load File(s)** / **Load Folder** buttons in `index.html`).
+
+- **Node.js / Browser**: reads the in-memory file store.  Files that exist only
+  on the real filesystem (Node.js) are **not** included — only files explicitly
+  registered with `pl2js.loadFile()` appear in the list.
+- Succeeds with an empty list `[]` when no files have been loaded.
+- The order of paths in the list is unspecified.
+
+```prolog
+% Check which files are currently available:
+:- list_loaded_files(Fs), maplist(writeln, Fs).
+
+% Verify a specific file has been loaded:
+:- list_loaded_files(Fs), memberchk('data.txt', Fs).
 ```
 
 #### `consult(+Source)`
