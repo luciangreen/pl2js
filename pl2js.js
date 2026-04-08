@@ -24,7 +24,8 @@
 //              atomic_list_concat/2-3,
 //              length/2, findall/3, succ/2, plus/3, functor/3,
 //              flatten/2, max_list/2, min_list/2, sum_list/2, numlist/3,
-//              maplist/2-5, include/3, exclude/3, convlist/3, foldl/4-7.
+//              maplist/2-5, include/3, exclude/3, convlist/3, foldl/4-7,
+//              memory_usage/1, set_memory_limit/1, get_memory_limit/1.
 //
 // Not supported (by design): floats, assert/retract, modules, DCG, exceptions,
 //   operator declarations, full ISO compliance.
@@ -808,6 +809,8 @@
     'list_loaded_files/1',
     // Dynamic loading
     'consult/1',
+    // Memory
+    'memory_usage/1', 'set_memory_limit/1', 'get_memory_limit/1',
   ]);
 
   // Prolog source loaded into every query database before user clauses.
@@ -934,9 +937,27 @@
   let   _formArgs   = {};   // form arguments passed in (URL params / POST data)
   let   _formInputs = [];   // form inputs collected by read_string / hidden_field
   let   _readStringCounter = 0;  // sequential counter for read_string field names
+  let   _memoryLimit = 0;   // soft memory limit in bytes; 0 = no limit
+
+  // Returns current heap memory usage in bytes.
+  // In Node.js uses process.memoryUsage().heapUsed; in browsers uses
+  // performance.memory.usedJSHeapSize when available, otherwise returns 0.
+  function _getMemoryUsage() {
+    if (typeof process !== 'undefined' && process.memoryUsage) {
+      return process.memoryUsage().heapUsed;
+    }
+    if (typeof performance !== 'undefined' && performance.memory &&
+        typeof performance.memory.usedJSHeapSize === 'number') {
+      return performance.memory.usedJSHeapSize;
+    }
+    return 0;
+  }
 
   function solve(goal, env, db, depth, k) {
     if (depth > MAX_DEPTH) throw new Error('Maximum depth exceeded (possible infinite loop)');
+    if (_memoryLimit > 0 && _getMemoryUsage() > _memoryLimit) {
+      throw new Error('Memory limit exceeded (' + _memoryLimit + ' bytes)');
+    }
 
     goal = deref(env, goal);
 
@@ -2385,6 +2406,26 @@
     if (f === 'b_setval' && a === 2)  { k(env); return; }
     if (f === 'b_getval' && a === 2)  { return; }
     if (f === 'read_term' && a === 2) { return; }
+
+    // ---- Memory ----
+    if (f === 'memory_usage' && a === 1) {
+      const e2 = copyEnv(env);
+      if (unify(e2, goal.args[0], mkInt(_getMemoryUsage()))) k(e2);
+      return;
+    }
+    if (f === 'set_memory_limit' && a === 1) {
+      const limitT = deref(env, goal.args[0]);
+      if (limitT.type !== 'int') throw new Error('set_memory_limit/1: argument must be an integer');
+      if (limitT.val < 0) throw new Error('set_memory_limit/1: limit must be >= 0');
+      _memoryLimit = limitT.val;
+      k(env);
+      return;
+    }
+    if (f === 'get_memory_limit' && a === 1) {
+      const e2 = copyEnv(env);
+      if (unify(e2, goal.args[0], mkInt(_memoryLimit))) k(e2);
+      return;
+    }
     if (f === 'with_output_to' && a === 2) {
       // simplified: run goal, capture into string, unify with first arg
       const dest = deref(env, goal.args[0]);

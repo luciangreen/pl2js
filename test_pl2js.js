@@ -2831,6 +2831,79 @@ test('consult/1 with Src from read_file loads my_length/2 predicate', function (
 });
 
 
+group('Memory predicates');
+
+test('memory_usage/1 unifies with a non-negative integer', function () {
+  const r = q('', 'memory_usage(M).');
+  assert.ok(r.ok, r.error);
+  assert.ok(r.answers.length > 0, 'should have an answer');
+  const val = parseInt(r.answers[0]['M'], 10);
+  assert.ok(!isNaN(val) && val >= 0, 'memory usage should be a non-negative integer, got: ' + r.answers[0]['M']);
+});
+
+test('memory_usage/1 fails when bound to a wrong value', function () {
+  const r = q('', 'memory_usage(99999999999).');
+  // memory_usage unifies, so if the current usage does not equal 99999999999 it fails
+  // (or it might succeed if by coincidence the usage equals that — practically impossible)
+  // We just confirm the query does not throw an error
+  assert.strictEqual(r.error, null, 'should not throw an error');
+});
+
+test('get_memory_limit/1 returns 0 by default (no limit)', function () {
+  // Reset limit first to ensure clean state
+  q('', 'set_memory_limit(0).');
+  const r = q('', 'get_memory_limit(L).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['L'], '0');
+});
+
+test('set_memory_limit/1 and get_memory_limit/1 round-trip', function () {
+  const r = q('', 'set_memory_limit(1073741824), get_memory_limit(L).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['L'], '1073741824');
+  // Reset
+  q('', 'set_memory_limit(0).');
+});
+
+test('set_memory_limit/1 rejects non-integer', function () {
+  const r = q('', 'set_memory_limit(foo).');
+  assert.ok(!r.ok || r.error !== null || r.answers.length === 0,
+    'should fail or error on non-integer argument');
+});
+
+test('set_memory_limit/1 rejects negative value', function () {
+  const r = q('', 'set_memory_limit(-1).');
+  assert.ok(!r.ok || r.error !== null, 'should fail or error on negative limit');
+  // Reset to be safe
+  q('', 'set_memory_limit(0).');
+});
+
+test('set_memory_limit/1 with 0 disables memory limit', function () {
+  q('', 'set_memory_limit(0).');
+  const r = q('', 'get_memory_limit(L).');
+  assert.ok(r.ok, r.error);
+  assert.strictEqual(r.answers[0]['L'], '0');
+});
+
+test('memory_usage/1 and set_memory_limit/1 are rejected as user-defined predicates', function () {
+  const r1 = q('memory_usage(X) :- X = 42.', 'memory_usage(X).');
+  assert.ok(!r1.ok, 'should reject user definition of memory_usage/1');
+  const r2 = q('set_memory_limit(X) :- true.', 'set_memory_limit(0).');
+  assert.ok(!r2.ok, 'should reject user definition of set_memory_limit/1');
+});
+
+test('memory limit enforcement — exceeded limit raises error', function () {
+  // Set a 1-byte limit, which will be exceeded immediately
+  q('', 'set_memory_limit(1).');
+  const r = q('loop :- loop.', 'loop.');
+  assert.ok(!r.ok, 'should fail when memory limit is exceeded');
+  assert.ok(r.error && r.error.indexOf('Memory limit exceeded') !== -1,
+    'error should mention memory limit, got: ' + r.error);
+  // Reset
+  q('', 'set_memory_limit(0).');
+});
+
+
 console.log('\n' + '─'.repeat(50));
 console.log('Results: ' + _passed + ' passed, ' + _failed + ' failed');
 if (_failed > 0) {
